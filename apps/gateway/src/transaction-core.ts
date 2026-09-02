@@ -59,6 +59,11 @@ function addAudit(
   return event;
 }
 
+export function addWebhookAudit(id: string, action: string, reason: string, metadata?: AuditEvent["metadata"]): AuditEvent {
+  if (!transactions.has(id)) throw new Error("TRANSACTION_NOT_FOUND");
+  return addAudit(id, "razorpay", action, reason, metadata);
+}
+
 export async function loadMerchantSnapshot(input: PurchaseIntentInput): Promise<MerchantSnapshot> {
   const base = config.merchantInternalUrl.replace(/\/$/, "");
   const [productResponse, inventoryResponse, quoteResponse] = await Promise.all([
@@ -85,62 +90,23 @@ export function evaluatePolicy(input: PurchaseIntentInput, snapshot: MerchantSna
   const total = snapshot.quote.totalPaise;
 
   const spendPass = total <= input.maxSpendPaise;
-  checks.push({
-    rule: "MAX_SPEND",
-    result: spendPass ? "PASS" : "FAIL",
-    observed: `₹${(total / 100).toFixed(0)}`,
-    expected: `≤ ₹${(input.maxSpendPaise / 100).toFixed(0)}`,
-    reason: spendPass ? "Quote is within the user's spending limit." : "Quote exceeds the user's spending limit.",
-  });
+  checks.push({ rule: "MAX_SPEND", result: spendPass ? "PASS" : "FAIL", observed: `₹${(total / 100).toFixed(0)}`, expected: `≤ ₹${(input.maxSpendPaise / 100).toFixed(0)}`, reason: spendPass ? "Quote is within the user's spending limit." : "Quote exceeds the user's spending limit." });
 
   const quantityPass = quantity <= config.maxQuantity;
-  checks.push({
-    rule: "QUANTITY_LIMIT",
-    result: quantityPass ? "PASS" : "FAIL",
-    observed: String(quantity),
-    expected: `≤ ${config.maxQuantity}`,
-    reason: quantityPass ? "Requested quantity is within the policy limit." : "Requested quantity exceeds the policy limit.",
-  });
+  checks.push({ rule: "QUANTITY_LIMIT", result: quantityPass ? "PASS" : "FAIL", observed: String(quantity), expected: `≤ ${config.maxQuantity}`, reason: quantityPass ? "Requested quantity is within the policy limit." : "Requested quantity exceeds the policy limit." });
 
   const inventoryPass = snapshot.inventory >= quantity;
-  checks.push({
-    rule: "INVENTORY",
-    result: inventoryPass ? "PASS" : "FAIL",
-    observed: `${snapshot.inventory} available`,
-    expected: `${quantity} required`,
-    reason: inventoryPass ? "Inventory can satisfy the request." : "There is not enough inventory to satisfy the request.",
-  });
+  checks.push({ rule: "INVENTORY", result: inventoryPass ? "PASS" : "FAIL", observed: `${snapshot.inventory} available`, expected: `${quantity} required`, reason: inventoryPass ? "Inventory can satisfy the request." : "There is not enough inventory to satisfy the request." });
 
   const merchantPass = snapshot.quote.merchantId === input.merchantId;
-  checks.push({
-    rule: "MERCHANT",
-    result: merchantPass ? "PASS" : "FAIL",
-    observed: snapshot.quote.merchantId,
-    expected: input.merchantId,
-    reason: merchantPass ? "Quote belongs to the requested merchant." : "Quote merchant does not match the purchase intent.",
-  });
+  checks.push({ rule: "MERCHANT", result: merchantPass ? "PASS" : "FAIL", observed: snapshot.quote.merchantId, expected: input.merchantId, reason: merchantPass ? "Quote belongs to the requested merchant." : "Quote merchant does not match the purchase intent." });
 
   const quotePass = new Date(snapshot.quote.expiresAt).getTime() > now;
-  checks.push({
-    rule: "QUOTE_VALIDITY",
-    result: quotePass ? "PASS" : "FAIL",
-    observed: snapshot.quote.expiresAt,
-    expected: "expires in the future",
-    reason: quotePass ? "Quote is still valid." : "Quote has expired.",
-  });
+  checks.push({ rule: "QUOTE_VALIDITY", result: quotePass ? "PASS" : "FAIL", observed: snapshot.quote.expiresAt, expected: "expires in the future", reason: quotePass ? "Quote is still valid." : "Quote has expired." });
 
   const lineItem = snapshot.quote.lineItems[0];
-  const amountPass =
-    lineItem?.productId === input.productId &&
-    lineItem?.quantity === input.quantity &&
-    lineItem?.unitPricePaise === snapshot.product.pricePaise;
-  checks.push({
-    rule: "AMOUNT_INTEGRITY",
-    result: amountPass ? "PASS" : "FAIL",
-    observed: lineItem ? `${lineItem.quantity} × ${lineItem.unitPricePaise}` : "missing line item",
-    expected: `${input.quantity} × ${snapshot.product.pricePaise}`,
-    reason: amountPass ? "Server quote matches the current product price and quantity." : "Quote line item does not match the current product data.",
-  });
+  const amountPass = lineItem?.productId === input.productId && lineItem?.quantity === input.quantity && lineItem?.unitPricePaise === snapshot.product.pricePaise;
+  checks.push({ rule: "AMOUNT_INTEGRITY", result: amountPass ? "PASS" : "FAIL", observed: lineItem ? `${lineItem.quantity} × ${lineItem.unitPricePaise}` : "missing line item", expected: `${input.quantity} × ${snapshot.product.pricePaise}`, reason: amountPass ? "Server quote matches the current product price and quantity." : "Quote line item does not match the current product data." });
 
   return { decision: checks.every((check) => check.result === "PASS") ? "ALLOW" : "BLOCK", checks, evaluatedAt: new Date().toISOString() };
 }
@@ -148,33 +114,10 @@ export function evaluatePolicy(input: PurchaseIntentInput, snapshot: MerchantSna
 export async function proposeTransaction(input: PurchaseIntentInput): Promise<Transaction> {
   const id = `txn_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
   const now = new Date().toISOString();
-  const transaction: Transaction = {
-    id,
-    state: "intent_proposed",
-    intent: { ...input, id },
-    quote: {
-      quoteId: input.quoteId,
-      merchantId: input.merchantId,
-      lineItems: [],
-      subtotalPaise: 0,
-      shippingPaise: 0,
-      taxPaise: 0,
-      discountPaise: 0,
-      totalPaise: 0,
-      currency: "INR",
-      expiresAt: now,
-    },
-    createdAt: now,
-    updatedAt: now,
-  };
+  const transaction: Transaction = { id, state: "intent_proposed", intent: { ...input, id }, quote: { quoteId: input.quoteId, merchantId: input.merchantId, lineItems: [], subtotalPaise: 0, shippingPaise: 0, taxPaise: 0, discountPaise: 0, totalPaise: 0, currency: "INR", expiresAt: now }, createdAt: now, updatedAt: now };
 
   transactions.set(id, transaction);
-  addAudit(id, "ai_buyer", "USER_INTENT_RECEIVED", "The AI buyer proposed a structured purchase intent.", {
-    merchantId: input.merchantId,
-    productId: input.productId,
-    quantity: input.quantity,
-    maxSpendPaise: input.maxSpendPaise,
-  });
+  addAudit(id, "ai_buyer", "USER_INTENT_RECEIVED", "The AI buyer proposed a structured purchase intent.", { merchantId: input.merchantId, productId: input.productId, quantity: input.quantity, maxSpendPaise: input.maxSpendPaise });
 
   let snapshot: MerchantSnapshot;
   try {
@@ -192,12 +135,7 @@ export async function proposeTransaction(input: PurchaseIntentInput): Promise<Tr
   transitionTransaction(id, "policy_pending");
   const policy = evaluatePolicy(input, snapshot);
   transaction.policy = policy;
-  addAudit(
-    id,
-    "policy_engine",
-    policy.decision === "ALLOW" ? "POLICY_ALLOWED" : "POLICY_BLOCKED",
-    policy.decision === "ALLOW" ? "All mandatory transaction policies passed." : "At least one mandatory transaction policy failed.",
-  );
+  addAudit(id, "policy_engine", policy.decision === "ALLOW" ? "POLICY_ALLOWED" : "POLICY_BLOCKED", policy.decision === "ALLOW" ? "All mandatory transaction policies passed." : "At least one mandatory transaction policy failed.");
 
   transitionTransaction(id, policy.decision === "ALLOW" ? "policy_authorized" : "policy_blocked");
   return transactions.get(id)!;
@@ -266,7 +204,7 @@ export function recordPaymentVerified(id: string): Transaction {
   if (transaction.state !== "payment_captured") throw new Error("PAYMENT_NOT_CAPTURED");
   transitionTransaction(id, "payment_verified");
   addAudit(id, "gateway", "PAYMENT_VERIFIED", "Razorpay payment details and checkout signature were verified server-side.", { razorpayPaymentId: transaction.razorpayPaymentId ?? null });
-  return getTransaction(id)!;
+  return transaction;
 }
 
 export function confirmOrder(id: string): Transaction {
