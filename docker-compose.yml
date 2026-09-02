@@ -23,15 +23,15 @@ services:
       dockerfile: apps/gateway/Dockerfile
     container_name: mandate-gateway
     restart: unless-stopped
+    env_file:
+      - ./apps/gateway/.env
     environment:
+      NODE_ENV: production
       PORT: 4000
       MERCHANT_APP_ORIGIN: http://localhost:3000
       MERCHANT_INTERNAL_URL: http://merchant:3000
       BUYER_APP_ORIGIN: http://localhost:3001
       INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:-mandate-local-gateway}
-      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
-      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
-      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
       RAZORPAY_BASE_URL: https://api.razorpay.com/v1
     ports:
       - "4000:4000"
