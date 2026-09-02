@@ -32,6 +32,13 @@ type Quote = {
   expiresAt: string;
   lineItems: Array<{ productId: string; quantity: number }>;
 };
+type Plan = {
+  category: string;
+  requirements: string[];
+  rankedProducts: Array<{ productId: string; score: number; rationale: string }>;
+  selectedProductId: string;
+  decisionSummary: string;
+};
 type Transaction = {
   id: string;
   state: string;
@@ -41,43 +48,13 @@ type Transaction = {
   quote: Quote;
   policy?: { decision: "ALLOW" | "BLOCK"; checks: Array<{ rule: string; result: "PASS" | "FAIL"; observed: string; expected: string; reason: string }> };
 };
-
-type RazorpayCheckout = {
-  keyId: string;
-  currency: "INR";
-  order: { id: string; amount: number; currency: string };
-};
-
-function parseRequest(text: string, catalog: Product[], maxSpendPaise: number) {
-  const lower = text.toLowerCase();
-  const category = lower.includes("keyboard")
-    ? "keyboards"
-    : lower.includes("mouse")
-      ? "mice"
-      : lower.includes("monitor")
-        ? "monitors"
-        : lower.includes("webcam")
-          ? "webcams"
-          : lower.includes("watch")
-            ? "smartwatches"
-            : "headphones";
-
-  const candidates = catalog.filter((item) => item.category === category && item.inventory > 0);
-  const ancRequired = lower.includes("anc") || lower.includes("noise cancellation");
-  const filtered = candidates.filter((item) => !ancRequired || item.features.some((feature) => feature.toLowerCase().includes("noise cancellation")));
-  const affordable = filtered.filter((item) => item.pricePaise <= maxSpendPaise);
-  const pool = affordable.length > 0 ? affordable : filtered.length > 0 ? filtered : candidates;
-
-  return [...pool].sort((a, b) => {
-    if (a.pricePaise !== b.pricePaise && lower.includes("under")) return a.pricePaise - b.pricePaise;
-    return b.rating - a.rating;
-  })[0];
-}
+type RazorpayCheckout = { keyId: string; currency: "INR"; order: { id: string; amount: number; currency: string } };
 
 export default function BuyerWorkspace() {
   const [request, setRequest] = useState("Buy the best ANC headphones under ₹5,000");
   const [maxSpend, setMaxSpend] = useState(5000);
   const [product, setProduct] = useState<Product | null>(null);
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [stage, setStage] = useState("ready");
   const [error, setError] = useState("");
@@ -101,19 +78,24 @@ export default function BuyerWorkspace() {
     setTransaction(null);
     setActivity([]);
     setProduct(null);
+    setPlan(null);
     setCheckout(null);
     setStage("working");
 
     try {
       setActivity(["Reading your constraints", "Discovering Mandate Market"]);
-      const catalogResponse = await fetch(`${MERCHANT_URL}/api/agent/catalog`, { cache: "no-store" });
-      if (!catalogResponse.ok) throw new Error("Unable to read merchant catalog.");
-      const catalogBody = (await catalogResponse.json()) as CatalogResponse;
-      const chosen = parseRequest(request, catalogBody.products, maxSpend * 100);
-      if (!chosen) throw new Error("No qualifying product was found.");
+      const planResponse = await fetch("/api/agent/purchase-plan", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ request, maxSpendPaise: maxSpend * 100 }),
+      });
+      const planBody = (await planResponse.json()) as { plan?: Plan; selectedProduct?: Product; error?: string; detail?: string };
+      if (!planResponse.ok || !planBody.plan || !planBody.selectedProduct) throw new Error(planBody.error === "OPENAI_API_KEY_NOT_CONFIGURED" ? "Buyer model is not configured. Add OPENAI_API_KEY to the buyer server environment." : planBody.detail ?? planBody.error ?? "The buyer could not produce a purchase plan.");
 
+      const chosen = planBody.selectedProduct;
+      setPlan(planBody.plan);
       setProduct(chosen);
-      setActivity((current) => [...current, `${catalogBody.products.length} products evaluated`, `${chosen.name} selected`]);
+      setActivity((current) => [...current, "Catalog loaded through merchant API", `${planBody.plan!.rankedProducts.length} products ranked`, `${chosen.name} selected by buyer model`]);
 
       const quoteResponse = await fetch(`${MERCHANT_URL}/api/agent/checkout/preview`, {
         method: "POST",
@@ -123,7 +105,7 @@ export default function BuyerWorkspace() {
       if (!quoteResponse.ok) throw new Error("Merchant could not produce a checkout quote.");
       const quoteBody = (await quoteResponse.json()) as { quote: Quote };
 
-      setActivity((current) => [...current, "Checkout quote verified"]);
+      setActivity((current) => [...current, "Checkout quote obtained"]);
       const transactionResponse = await fetch(`${GATEWAY_URL}/v1/purchase-intents`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -159,16 +141,8 @@ export default function BuyerWorkspace() {
     setError("");
     try {
       setActivity((current) => [...current, "Creating Razorpay Test Mode order"]);
-      const orderResponse = await fetch(`${GATEWAY_URL}/v1/transactions/${transaction.id}/razorpay-order`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-      });
-      const body = (await orderResponse.json()) as {
-        transaction?: Transaction;
-        order?: { id: string; amount: number; currency: string };
-        checkout?: { keyId: string; currency: "INR" };
-        error?: string;
-      };
+      const orderResponse = await fetch(`${GATEWAY_URL}/v1/transactions/${transaction.id}/razorpay-order`, { method: "POST", headers: { "content-type": "application/json" } });
+      const body = (await orderResponse.json()) as { transaction?: Transaction; order?: { id: string; amount: number; currency: string }; checkout?: { keyId: string; currency: "INR" }; error?: string };
       if (!orderResponse.ok || !body.transaction || !body.order || !body.checkout) throw new Error(body.error ?? "Unable to create the Razorpay Test Mode order.");
       setTransaction(body.transaction);
       setCheckout({ keyId: body.checkout.keyId, currency: body.checkout.currency, order: body.order });
@@ -229,41 +203,29 @@ export default function BuyerWorkspace() {
         <section className="request-column">
           <div className="section-kicker">AI BUYER</div>
           <h1>Purchase workspace</h1>
-          <p className="lede">Give the buyer a goal and a hard spending boundary. It handles discovery and checkout preparation; the gateway controls authorization.</p>
+          <p className="lede">Give the buyer a goal and a hard spending boundary. The model handles product reasoning; the gateway controls authorization.</p>
 
           <label className="field-label" htmlFor="request">Request</label>
           <textarea id="request" value={request} onChange={(event) => setRequest(event.target.value)} />
 
           <div className="limit-row">
-            <div>
-              <label className="field-label" htmlFor="limit">Maximum spend</label>
-              <div className="currency-input"><span>₹</span><input id="limit" type="number" min={0} step={100} value={maxSpend} onChange={(event) => setMaxSpend(Number(event.target.value) || 0)} /></div>
-            </div>
-            <div className="policy-note"><strong>Hard limit</strong><span>Owned by the user policy, not the agent.</span></div>
+            <div><label className="field-label" htmlFor="limit">Maximum spend</label><div className="currency-input"><span>₹</span><input id="limit" type="number" min={0} step={100} value={maxSpend} onChange={(event) => setMaxSpend(Number(event.target.value) || 0)} /></div></div>
+            <div className="policy-note"><strong>Hard limit</strong><span>Owned by the user policy, not the buyer model.</span></div>
           </div>
 
-          <button className="run-button" onClick={() => void runAgent()} disabled={stage === "working" || !request.trim()}>
-            {stage === "working" ? "Evaluating…" : "Evaluate purchase"}
-            <span>→</span>
-          </button>
-
+          <button className="run-button" onClick={() => void runAgent()} disabled={stage === "working" || !request.trim()}>{stage === "working" ? "Evaluating…" : "Evaluate purchase"}<span>→</span></button>
           {transaction?.state === "policy_authorized" && !checkout ? <button className="pay-button" onClick={() => void prepareRazorpayCheckout()}>Create Razorpay Test Order <span>→</span></button> : null}
           {checkout && stage === "payment" ? <button className="pay-button pay-ready" onClick={launchRazorpay}>Open Razorpay Test Checkout <span>↗</span></button> : null}
-
           {error ? <div className="error-box">{error}</div> : null}
-
           <div className="workspace-footer"><span>Merchant: Mandate Market</span><span>Payment authority: gateway only</span></div>
         </section>
 
         <section className="decision-column">
-          <div className="decision-header">
-            <div><span className={`status status-${stage}`}>{statusLabel}</span><span className="decision-label">Current transaction</span></div>
-            {transaction ? <code>{transaction.id}</code> : <span className="quiet">No transaction yet</span>}
-          </div>
+          <div className="decision-header"><div><span className={`status status-${stage}`}>{statusLabel}</span><span className="decision-label">Current transaction</span></div>{transaction ? <code>{transaction.id}</code> : <span className="quiet">No transaction yet</span>}</div>
 
           <div className="product-panel">
             <span className="panel-kicker">SELECTED PRODUCT</span>
-            {product ? <><div className="product-main"><div><h2>{product.name}</h2><p>{product.shortDescription}</p></div><strong>{money(selectedAmount)}</strong></div><div className="feature-list">{product.features.slice(0, 4).map((feature) => <span key={feature}>✓ {feature}</span>)}</div></> : <div className="empty-selection"><span>—</span><p>Run the buyer to see a live product decision.</p></div>}
+            {product ? <><div className="product-main"><div><h2>{product.name}</h2><p>{product.shortDescription}</p></div><strong>{money(selectedAmount)}</strong></div><div className="feature-list">{product.features.slice(0, 4).map((feature) => <span key={feature}>✓ {feature}</span>)}</div>{plan ? <div className="model-reason"><span>BUYER MODEL</span><p>{plan.decisionSummary}</p></div> : null}</> : <div className="empty-selection"><span>—</span><p>Run the buyer to see a live product decision.</p></div>}
           </div>
 
           <div className="policy-panel">
@@ -277,9 +239,7 @@ export default function BuyerWorkspace() {
             <div className="timeline">{(activity.length ? activity : ["Waiting for a request"]).map((item, index) => <div className="timeline-row" key={`${item}-${index}`}><span className={`timeline-dot ${activity.length ? "done" : ""}`} /><span>{item}</span></div>)}</div>
           </div>
 
-          {transaction?.razorpayOrderId || transaction?.razorpayPaymentId ? (
-            <div className="refs-panel"><div><span>Razorpay order</span><code>{transaction.razorpayOrderId ?? "—"}</code></div><div><span>Payment</span><code>{transaction.razorpayPaymentId ?? "—"}</code></div></div>
-          ) : null}
+          {transaction?.razorpayOrderId || transaction?.razorpayPaymentId ? <div className="refs-panel"><div><span>Razorpay order</span><code>{transaction.razorpayOrderId ?? "—"}</code></div><div><span>Payment</span><code>{transaction.razorpayPaymentId ?? "—"}</code></div></div> : null}
         </section>
       </section>
     </main>
