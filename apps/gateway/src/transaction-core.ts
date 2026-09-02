@@ -138,7 +138,9 @@ export function evaluatePolicy(
 
   const lineItem = snapshot.quote.lineItems[0];
   const amountMatchesProduct =
-    lineItem?.productId === input.productId && lineItem?.quantity === input.quantity && lineItem?.unitPricePaise === snapshot.product.pricePaise;
+    lineItem?.productId === input.productId &&
+    lineItem?.quantity === input.quantity &&
+    lineItem?.unitPricePaise === snapshot.product.pricePaise;
   checks.push({
     rule: "AMOUNT_INTEGRITY",
     result: amountMatchesProduct ? "PASS" : "FAIL",
@@ -226,13 +228,15 @@ export function transitionTransaction(id: string, nextState: TransactionState): 
   if (current.state === nextState) return current;
   if (terminalStates.has(current.state)) throw new Error(`INVALID_TRANSITION:${current.state}->${nextState}`);
 
-  const allowed = validTransitions[current.state];
-  if (!allowed.includes(nextState)) throw new Error(`INVALID_TRANSITION:${current.state}->${nextState}`);
+  const previousState = current.state;
+  const allowed = validTransitions[previousState];
+  if (!allowed.includes(nextState)) throw new Error(`INVALID_TRANSITION:${previousState}->${nextState}`);
 
   current.state = nextState;
   current.updatedAt = new Date().toISOString();
   transactions.set(id, current);
-  addAudit(id, "gateway", "TRANSACTION_STATE_CHANGED", `Transaction moved from ${current.state} to ${nextState}.`, {
+  addAudit(id, "gateway", "TRANSACTION_STATE_CHANGED", `Transaction moved from ${previousState} to ${nextState}.`, {
+    fromState: previousState,
     state: nextState,
   });
   return current;
