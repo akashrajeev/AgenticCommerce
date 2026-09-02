@@ -5,8 +5,28 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { config } from "./config.js";
-import { addWebhookAudit, attachRazorpayOrder, confirmOrder, findTransactionByRazorpayOrderId, getAllTransactions, getTimeline, getTransaction, markCheckoutStarted, proposeTransaction, recordPayment, recordPaymentVerified } from "./transaction-core.js";
-import { capturePayment, createOrder, fetchOrderPayments, fetchPayment, getPublicConfig, verifyCheckoutSignature, verifyWebhookSignature } from "./razorpay.js";
+import {
+  addWebhookAudit,
+  attachRazorpayOrder,
+  confirmOrder,
+  findTransactionByRazorpayOrderId,
+  getAllTransactions,
+  getTimeline,
+  getTransaction,
+  markCheckoutStarted,
+  proposeTransaction,
+  recordPayment,
+  recordPaymentVerified,
+} from "./transaction-core.js";
+import {
+  capturePayment,
+  createOrder,
+  fetchOrderPayments,
+  fetchPayment,
+  getPublicConfig,
+  verifyCheckoutSignature,
+  verifyWebhookSignature,
+} from "./razorpay.js";
 
 const processedWebhookKeys = new Set<string>();
 
@@ -34,19 +54,52 @@ function getTransactionOrThrow(id: string): Transaction {
 async function confirmMerchantOrder(transaction: Transaction) {
   if (!transaction.razorpayOrderId || !transaction.razorpayPaymentId) throw new Error("PAYMENT_REFERENCE_INCOMPLETE");
   const base = config.merchantInternalUrl.replace(/\/$/, "");
-  const response = await fetch(`${base}/api/agent/orders/confirm`, { method: "POST", headers: { "content-type": "application/json", "x-mandate-gateway-secret": config.internalGatewaySecret }, body: JSON.stringify({ transactionId: transaction.id, productId: transaction.intent.productId, quantity: transaction.intent.quantity, amountPaise: transaction.quote.totalPaise, razorpayOrderId: transaction.razorpayOrderId, razorpayPaymentId: transaction.razorpayPaymentId }) });
+  const response = await fetch(`${base}/api/agent/orders/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-mandate-gateway-secret": config.internalGatewaySecret },
+    body: JSON.stringify({
+      transactionId: transaction.id,
+      productId: transaction.intent.productId,
+      quantity: transaction.intent.quantity,
+      amountPaise: transaction.quote.totalPaise,
+      razorpayOrderId: transaction.razorpayOrderId,
+      razorpayPaymentId: transaction.razorpayPaymentId,
+    }),
+  });
   if (!response.ok) throw new Error("MERCHANT_ORDER_CONFIRMATION_FAILED");
   return response.json();
 }
 
 async function reconcileCapturedPayment(transactionId: string, paymentId: string, source: "checkout" | "webhook") {
   const transaction = getTransactionOrThrow(transactionId);
-  if (transaction.state === "order_confirmed") return transaction;
+
+  // A webhook can legitimately arrive after the browser has already completed the
+  // synchronous verification path. Preserve the webhook evidence in the audit trail.
+  if (transaction.state === "order_confirmed") {
+    if (source === "webhook") {
+      addWebhookAudit(transactionId, "WEBHOOK_RECONCILIATED", "Razorpay confirmed a captured payment for an already-confirmed transaction; no state change was required.", {
+        razorpayPaymentId: paymentId,
+        source,
+        alreadyConfirmed: true,
+      });
+    }
+    return transaction;
+  }
+
   recordPayment(transactionId, paymentId, "captured");
   if (getTransaction(transactionId)?.state === "payment_captured") recordPaymentVerified(transactionId);
   const verified = getTransactionOrThrow(transactionId);
   if (verified.state !== "payment_verified" && verified.state !== "order_confirmed") return verified;
-  addWebhookAudit(transactionId, source === "webhook" ? "WEBHOOK_RECONCILIATED" : "CHECKOUT_RECONCILIATED", source === "webhook" ? "Razorpay webhook confirmed the captured payment and triggered reconciliation." : "Browser checkout callback was verified and triggered payment reconciliation.", { razorpayPaymentId: paymentId, source });
+
+  addWebhookAudit(
+    transactionId,
+    source === "webhook" ? "WEBHOOK_RECONCILIATED" : "CHECKOUT_RECONCILIATED",
+    source === "webhook"
+      ? "Razorpay webhook confirmed the captured payment and triggered reconciliation."
+      : "Browser checkout callback was verified and triggered payment reconciliation.",
+    { razorpayPaymentId: paymentId, source },
+  );
+
   if (verified.state === "payment_verified") await confirmMerchantOrder(verified);
   return confirmOrder(transactionId);
 }
@@ -55,7 +108,10 @@ async function captureAndReconcile(transactionId: string, paymentId: string, amo
   const transaction = getTransactionOrThrow(transactionId);
   if (transaction.state === "order_confirmed") return transaction;
   const payment = await fetchPayment(paymentId);
-  if (payment.status === "failed") { recordPayment(transactionId, payment.id, "failed"); return getTransactionOrThrow(transactionId); }
+  if (payment.status === "failed") {
+    recordPayment(transactionId, payment.id, "failed");
+    return getTransactionOrThrow(transactionId);
+  }
   if (payment.status === "authorized") {
     const captured = await capturePayment(payment.id, amountPaise);
     if (captured.status === "captured") return reconcileCapturedPayment(transactionId, captured.id, "checkout");
@@ -80,13 +136,27 @@ export function createApp() {
       const dedupeKey = request.header("x-razorpay-event-id") ?? createHash("sha256").update(rawBody).digest("hex");
       if (processedWebhookKeys.has(dedupeKey)) return response.status(200).json({ received: true, duplicate: true });
 
-      const payload = JSON.parse(rawBody) as { event?: string; payload?: { payment?: { entity?: { id?: string; order_id?: string } }; order?: { entity?: { id?: string } } } };
+      const payload = JSON.parse(rawBody) as {
+        event?: string;
+        payload?: {
+          payment?: { entity?: { id?: string; order_id?: string } };
+          order?: { entity?: { id?: string } };
+        };
+      };
       const event = payload.event ?? "unknown";
       const payment = payload.payload?.payment?.entity;
       const orderId = payment?.order_id ?? payload.payload?.order?.entity?.id;
       const transaction = orderId ? findTransactionByRazorpayOrderId(orderId) : undefined;
 
-      if (transaction) addWebhookAudit(transaction.id, "WEBHOOK_RECEIVED", `Razorpay delivered ${event}.`, { event, razorpayOrderId: orderId ?? null, razorpayPaymentId: payment?.id ?? null, webhookEventId: dedupeKey });
+      if (transaction) {
+        addWebhookAudit(transaction.id, "WEBHOOK_RECEIVED", `Razorpay delivered ${event}.`, {
+          event,
+          razorpayOrderId: orderId ?? null,
+          razorpayPaymentId: payment?.id ?? null,
+          webhookEventId: dedupeKey,
+        });
+      }
+
       if (transaction && payment?.id) {
         if (event === "payment.failed") recordPayment(transaction.id, payment.id, "failed");
         else if (event === "payment.authorized") recordPayment(transaction.id, payment.id, "authorized");
@@ -111,8 +181,12 @@ export function createApp() {
   app.get("/v1/transactions", (_request, response) => response.json({ transactions: getAllTransactions() }));
 
   app.post("/v1/purchase-intents", async (request, response) => {
-    try { response.status(201).json({ transaction: await proposeTransaction(parsePurchaseIntent(request.body)) }); }
-    catch (error) { const message = error instanceof Error ? error.message : "INVALID_REQUEST"; response.status(message === "INVALID_REQUEST" || message.startsWith("INVALID_") ? 400 : 422).json({ error: message }); }
+    try {
+      response.status(201).json({ transaction: await proposeTransaction(parsePurchaseIntent(request.body)) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "INVALID_REQUEST";
+      response.status(message === "INVALID_REQUEST" || message.startsWith("INVALID_") ? 400 : 422).json({ error: message });
+    }
   });
 
   app.post("/v1/transactions/:id/razorpay-order", async (request, response) => {
@@ -125,12 +199,20 @@ export function createApp() {
       const order = await createOrder(transaction);
       const updated = attachRazorpayOrder(transaction.id, order.id);
       return response.status(201).json({ transaction: updated, order, checkout: getPublicConfig() });
-    } catch (error) { const message = error instanceof Error ? error.message : "RAZORPAY_ORDER_FAILED"; return response.status(message.includes("NOT_CONFIGURED") ? 503 : 422).json({ error: message }); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "RAZORPAY_ORDER_FAILED";
+      return response.status(message.includes("NOT_CONFIGURED") ? 503 : 422).json({ error: message });
+    }
   });
 
   app.post("/v1/transactions/:id/checkout-started", (request, response) => {
-    try { const transaction = getTransactionOrThrow(request.params.id); const updated = transaction.state === "checkout_started" ? transaction : markCheckoutStarted(transaction.id); return response.json({ transaction: updated, checkout: getPublicConfig() }); }
-    catch (error) { return response.status(422).json({ error: error instanceof Error ? error.message : "CHECKOUT_START_FAILED" }); }
+    try {
+      const transaction = getTransactionOrThrow(request.params.id);
+      const updated = transaction.state === "checkout_started" ? transaction : markCheckoutStarted(transaction.id);
+      return response.json({ transaction: updated, checkout: getPublicConfig() });
+    } catch (error) {
+      return response.status(422).json({ error: error instanceof Error ? error.message : "CHECKOUT_START_FAILED" });
+    }
   });
 
   app.post("/v1/transactions/:id/verify-payment", async (request, response) => {
@@ -143,7 +225,10 @@ export function createApp() {
       if (!verifyCheckoutSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature)) return response.status(400).json({ error: "INVALID_CHECKOUT_SIGNATURE" });
       const result = await captureAndReconcile(transaction.id, razorpayPaymentId, transaction.quote.totalPaise);
       return response.json({ transaction: result, verified: result.state === "order_confirmed" || result.state === "payment_verified" });
-    } catch (error) { const message = error instanceof Error ? error.message : "PAYMENT_VERIFICATION_FAILED"; return response.status(message.includes("NOT_CONFIGURED") ? 503 : 422).json({ error: message }); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "PAYMENT_VERIFICATION_FAILED";
+      return response.status(message.includes("NOT_CONFIGURED") ? 503 : 422).json({ error: message });
+    }
   });
 
   app.post("/v1/transactions/:id/capture", async (request, response) => {
@@ -153,10 +238,21 @@ export function createApp() {
       const payment = await fetchPayment(transaction.razorpayPaymentId);
       const result = await captureAndReconcile(transaction.id, payment.id, transaction.quote.totalPaise);
       return response.json({ transaction: result, payment });
-    } catch (error) { return response.status(422).json({ error: error instanceof Error ? error.message : "CAPTURE_FAILED" }); }
+    } catch (error) {
+      return response.status(422).json({ error: error instanceof Error ? error.message : "CAPTURE_FAILED" });
+    }
   });
 
-  app.get("/v1/transactions/:id", (request, response) => { const transaction = getTransaction(request.params.id); if (!transaction) return response.status(404).json({ error: "TRANSACTION_NOT_FOUND" }); return response.json({ transaction }); });
-  app.get("/v1/transactions/:id/timeline", (request, response) => { if (!getTransaction(request.params.id)) return response.status(404).json({ error: "TRANSACTION_NOT_FOUND" }); return response.json({ events: getTimeline(request.params.id) }); });
+  app.get("/v1/transactions/:id", (request, response) => {
+    const transaction = getTransaction(request.params.id);
+    if (!transaction) return response.status(404).json({ error: "TRANSACTION_NOT_FOUND" });
+    return response.json({ transaction });
+  });
+
+  app.get("/v1/transactions/:id/timeline", (request, response) => {
+    if (!getTransaction(request.params.id)) return response.status(404).json({ error: "TRANSACTION_NOT_FOUND" });
+    return response.json({ events: getTimeline(request.params.id) });
+  });
+
   return app;
 }
