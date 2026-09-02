@@ -1,4 +1,22 @@
-import { catalog, merchantManifest } from "../../../../../../merchant/src/lib/catalog";
+type Product = {
+  id: string;
+  name: string;
+  category: string;
+  pricePaise: number;
+  rating: number;
+  inventory: number;
+  features: string[];
+  specifications: Record<string, string>;
+};
+
+type MerchantManifest = {
+  merchantId: string;
+  name: string;
+  version: string;
+  currency: "INR";
+  capabilities: Record<string, boolean | string>;
+  endpoints: Record<string, string>;
+};
 
 const model = process.env.OPENAI_MODEL ?? "gpt-5.6-luna";
 const apiKey = process.env.OPENAI_API_KEY ?? "";
@@ -37,23 +55,18 @@ export async function POST(request: Request) {
   const userRequest = typeof body?.request === "string" ? body.request.trim() : "";
   const maxSpendPaise = typeof body?.maxSpendPaise === "number" ? body.maxSpendPaise : NaN;
 
-  if (!userRequest || !Number.isInteger(maxSpendPaise) || maxSpendPaise < 0) {
-    return Response.json({ error: "INVALID_BUYER_REQUEST" }, { status: 400 });
-  }
+  if (!userRequest || !Number.isInteger(maxSpendPaise) || maxSpendPaise < 0) return Response.json({ error: "INVALID_BUYER_REQUEST" }, { status: 400 });
+  if (!apiKey) return Response.json({ error: "OPENAI_API_KEY_NOT_CONFIGURED" }, { status: 503 });
 
-  if (!apiKey) {
-    return Response.json({ error: "OPENAI_API_KEY_NOT_CONFIGURED" }, { status: 503 });
-  }
+  const [manifestResponse, catalogResponse] = await Promise.all([
+    fetch(`${merchantInternalUrl}/.well-known/agent-commerce`, { cache: "no-store" }),
+    fetch(`${merchantInternalUrl}/api/agent/catalog`, { cache: "no-store" }),
+  ]);
 
-  // Read the live merchant contract and catalog before asking the model to choose.
-  const manifestResponse = await fetch(`${merchantInternalUrl}/.well-known/agent-commerce`, { cache: "no-store" });
-  const catalogResponse = await fetch(`${merchantInternalUrl}/api/agent/catalog`, { cache: "no-store" });
-  if (!manifestResponse.ok || !catalogResponse.ok) {
-    return Response.json({ error: "MERCHANT_DISCOVERY_FAILED" }, { status: 502 });
-  }
+  if (!manifestResponse.ok || !catalogResponse.ok) return Response.json({ error: "MERCHANT_DISCOVERY_FAILED" }, { status: 502 });
 
-  const manifest = (await manifestResponse.json()) as typeof merchantManifest;
-  const catalogBody = (await catalogResponse.json()) as { products: typeof catalog };
+  const manifest = (await manifestResponse.json()) as MerchantManifest;
+  const catalogBody = (await catalogResponse.json()) as { products: Product[] };
   const productContext = catalogBody.products.map((product) => ({
     id: product.id,
     name: product.name,
@@ -67,42 +80,24 @@ export async function POST(request: Request) {
 
   const response = await fetch(`${openAiBaseUrl}/responses`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
       input: [
         {
           role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: [
-                "You are the shopping planner inside MANDATE.",
-                "You may recommend and rank products, but you never authorize payment, change the user's spending limit, or claim a payment occurred.",
-                "Use only product IDs and facts present in the supplied merchant catalog.",
-                "The hard spending limit is supplied by the application and is immutable for this request.",
-                "Prefer products that satisfy explicit requirements and stay within the hard limit. If nothing qualifies, select the strongest available match so the deterministic policy engine can block it visibly.",
-                "Return concise user-facing reasons, not hidden chain-of-thought.",
-              ].join(" "),
-            },
-          ],
+          content: [{ type: "input_text", text: [
+            "You are the shopping planner inside MANDATE.",
+            "You may recommend and rank products, but you never authorize payment, change the user's spending limit, or claim a payment occurred.",
+            "Use only product IDs and facts present in the supplied merchant catalog.",
+            "The hard spending limit is supplied by the application and is immutable for this request.",
+            "Prefer products that satisfy explicit requirements and stay within the hard limit. If nothing qualifies, select the strongest available match so the deterministic policy engine can block it visibly.",
+            "Return concise user-facing reasons, not hidden chain-of-thought.",
+          ].join(" ") }],
         },
         {
           role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: JSON.stringify({
-                request: userRequest,
-                hardMaxSpendPaise: maxSpendPaise,
-                merchant: manifest,
-                products: productContext,
-              }),
-            },
-          ],
+          content: [{ type: "input_text", text: JSON.stringify({ request: userRequest, hardMaxSpendPaise: maxSpendPaise, merchant: manifest, products: productContext }) }],
         },
       ],
       text: {
@@ -119,10 +114,7 @@ export async function POST(request: Request) {
 
   const responseBody = (await response.json().catch(() => null)) as { output_text?: string; error?: { message?: string } } | null;
   if (!response.ok || !responseBody?.output_text) {
-    return Response.json(
-      { error: "MODEL_PLANNING_FAILED", detail: responseBody?.error?.message ?? "The model did not return a purchase plan." },
-      { status: 502 },
-    );
+    return Response.json({ error: "MODEL_PLANNING_FAILED", detail: responseBody?.error?.message ?? "The model did not return a purchase plan." }, { status: 502 });
   }
 
   let plan: {
@@ -140,17 +132,10 @@ export async function POST(request: Request) {
   }
 
   const validIds = new Set(productContext.map((product) => product.id));
-  if (!validIds.has(plan.selectedProductId) || plan.rankedProducts.some((item) => !validIds.has(item.productId))) {
-    return Response.json({ error: "MODEL_SELECTED_UNKNOWN_PRODUCT" }, { status: 502 });
-  }
+  if (!validIds.has(plan.selectedProductId) || plan.rankedProducts.some((item) => !validIds.has(item.productId))) return Response.json({ error: "MODEL_SELECTED_UNKNOWN_PRODUCT" }, { status: 502 });
 
-  const selected = productContext.find((product) => product.id === plan.selectedProductId);
-  if (!selected) return Response.json({ error: "MODEL_SELECTED_UNKNOWN_PRODUCT" }, { status: 502 });
+  const selectedProduct = productContext.find((product) => product.id === plan.selectedProductId);
+  if (!selectedProduct) return Response.json({ error: "MODEL_SELECTED_UNKNOWN_PRODUCT" }, { status: 502 });
 
-  return Response.json({
-    plan,
-    selectedProduct: selected,
-    merchantId: manifest.merchantId,
-    model,
-  });
+  return Response.json({ plan, selectedProduct, merchantId: manifest.merchantId, model });
 }
