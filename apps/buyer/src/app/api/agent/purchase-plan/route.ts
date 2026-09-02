@@ -50,6 +50,39 @@ const planSchema = {
   required: ["category", "requirements", "rankedProducts", "selectedProductId", "decisionSummary"],
 };
 
+type CheckoutQuote = {
+  quoteId: string;
+  merchantId: string;
+  lineItems: Array<{ productId: string; quantity: number; unitPricePaise: number; lineTotalPaise: number }>;
+  subtotalPaise: number;
+  shippingPaise: number;
+  taxPaise: number;
+  discountPaise: number;
+  totalPaise: number;
+  currency: "INR";
+  expiresAt: string;
+};
+
+type QuotedProduct = Product & {
+  checkoutTotalPaise: number;
+  shippingPaise: number;
+  taxPaise: number;
+  discountPaise: number;
+};
+
+async function getCheckoutQuote(productId: string): Promise<CheckoutQuote | null> {
+  const response = await fetch(`${merchantInternalUrl}/api/agent/checkout/preview`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ productId, quantity: 1 }),
+    cache: "no-store",
+  });
+
+  if (!response.ok) return null;
+  const body = (await response.json().catch(() => null)) as { quote?: CheckoutQuote } | null;
+  return body?.quote ?? null;
+}
+
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as { request?: unknown; maxSpendPaise?: unknown } | null;
   const userRequest = typeof body?.request === "string" ? body.request.trim() : "";
@@ -67,16 +100,23 @@ export async function POST(request: Request) {
 
   const manifest = (await manifestResponse.json()) as MerchantManifest;
   const catalogBody = (await catalogResponse.json()) as { products: Product[] };
-  const productContext = catalogBody.products.map((product) => ({
-    id: product.id,
-    name: product.name,
-    category: product.category,
-    pricePaise: product.pricePaise,
-    rating: product.rating,
-    inventory: product.inventory,
-    features: product.features,
-    specifications: product.specifications,
-  }));
+  const products = catalogBody.products;
+
+  const quoteResults = await Promise.all(products.map(async (product) => ({ product, quote: await getCheckoutQuote(product.id) })));
+  const quotedProducts: QuotedProduct[] = quoteResults
+    .filter((entry): entry is { product: Product; quote: CheckoutQuote } => Boolean(entry.quote))
+    .map(({ product, quote }) => ({
+      ...product,
+      checkoutTotalPaise: quote.totalPaise,
+      shippingPaise: quote.shippingPaise,
+      taxPaise: quote.taxPaise,
+      discountPaise: quote.discountPaise,
+    }));
+
+  if (!quotedProducts.length) return Response.json({ error: "MERCHANT_QUOTE_UNAVAILABLE" }, { status: 502 });
+
+  const withinBudget = quotedProducts.filter((product) => product.inventory > 0 && product.checkoutTotalPaise <= maxSpendPaise);
+  const modelProducts = withinBudget.length > 0 ? withinBudget : quotedProducts;
 
   const response = await fetch(`${openAiBaseUrl}/responses`, {
     method: "POST",
@@ -89,15 +129,24 @@ export async function POST(request: Request) {
           content: [{ type: "input_text", text: [
             "You are the shopping planner inside MANDATE.",
             "You may recommend and rank products, but you never authorize payment, change the user's spending limit, or claim a payment occurred.",
-            "Use only product IDs and facts present in the supplied merchant catalog.",
+            "Use only product IDs and facts present in the supplied merchant catalog and live checkout quotes.",
             "The hard spending limit is supplied by the application and is immutable for this request.",
-            "Prefer products that satisfy explicit requirements and stay within the hard limit. If nothing qualifies, select the strongest available match so the deterministic policy engine can block it visibly.",
+            "IMPORTANT: the spending limit applies to the complete checkout total, including tax, shipping and discounts, not just the product price.",
+            "Prefer products whose live checkout total is within the hard limit and satisfy explicit requirements.",
+            "When qualifying products are supplied, select only from those qualifying products.",
+            "If no product qualifies, select the strongest available match so the deterministic policy engine can block it visibly.",
             "Return concise user-facing reasons, not hidden chain-of-thought.",
           ].join(" ") }],
         },
         {
           role: "user",
-          content: [{ type: "input_text", text: JSON.stringify({ request: userRequest, hardMaxSpendPaise: maxSpendPaise, merchant: manifest, products: productContext }) }],
+          content: [{ type: "input_text", text: JSON.stringify({
+            request: userRequest,
+            hardMaxSpendPaise: maxSpendPaise,
+            merchant: manifest,
+            qualifyingProductsAvailable: withinBudget.length > 0,
+            products: modelProducts,
+          }) }],
         },
       ],
       text: {
@@ -114,19 +163,11 @@ export async function POST(request: Request) {
 
   const responseBody = (await response.json().catch(() => null)) as {
     output_text?: string;
-    output?: Array<{
-      type?: string;
-      content?: Array<{
-        type?: string;
-        text?: string;
-      }>;
-    }>;
+    output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
     error?: { message?: string };
   } | null;
 
-  if (!response.ok) {
-    return Response.json({ error: "MODEL_PLANNING_FAILED", detail: responseBody?.error?.message ?? "The model request failed." }, { status: 502 });
-  }
+  if (!response.ok) return Response.json({ error: "MODEL_PLANNING_FAILED", detail: responseBody?.error?.message ?? "The model request failed." }, { status: 502 });
 
   const modelText =
     typeof responseBody?.output_text === "string" && responseBody.output_text.trim()
@@ -138,15 +179,7 @@ export async function POST(request: Request) {
           .find((text): text is string => typeof text === "string" && Boolean(text.trim()))
           ?.trim() ?? "";
 
-  if (!modelText) {
-    return Response.json(
-      {
-        error: "MODEL_PLANNING_FAILED",
-        detail: "The model returned no usable purchase-plan content.",
-      },
-      { status: 502 },
-    );
-  }
+  if (!modelText) return Response.json({ error: "MODEL_PLANNING_FAILED", detail: "The model returned no usable purchase-plan content." }, { status: 502 });
 
   let plan: {
     category: string;
@@ -162,10 +195,10 @@ export async function POST(request: Request) {
     return Response.json({ error: "MODEL_PLAN_INVALID" }, { status: 502 });
   }
 
-  const validIds = new Set(productContext.map((product) => product.id));
+  const validIds = new Set(modelProducts.map((product) => product.id));
   if (!validIds.has(plan.selectedProductId) || plan.rankedProducts.some((item) => !validIds.has(item.productId))) return Response.json({ error: "MODEL_SELECTED_UNKNOWN_PRODUCT" }, { status: 502 });
 
-  const selectedProduct = productContext.find((product) => product.id === plan.selectedProductId);
+  const selectedProduct = modelProducts.find((product) => product.id === plan.selectedProductId);
   if (!selectedProduct) return Response.json({ error: "MODEL_SELECTED_UNKNOWN_PRODUCT" }, { status: 502 });
 
   return Response.json({ plan, selectedProduct, merchantId: manifest.merchantId, model });
