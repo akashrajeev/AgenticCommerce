@@ -240,20 +240,24 @@ export function transitionTransaction(id: string, nextState: TransactionState): 
 export function attachRazorpayOrder(id: string, razorpayOrderId: string): Transaction {
   const transaction = getTransaction(id);
   if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
-  if (transaction.state !== "policy_authorized") throw new Error("TRANSACTION_NOT_AUTHORIZED");
+  if (transaction.state !== "policy_authorized") {
+    if (transaction.razorpayOrderId === razorpayOrderId) return transaction;
+    throw new Error("TRANSACTION_NOT_AUTHORIZED");
+  }
   transaction.razorpayOrderId = razorpayOrderId;
   transactions.set(id, transaction);
   transitionTransaction(id, "razorpay_order_created");
-  addAudit(id, "gateway", "RAZORPAY_ORDER_CREATED", "A Razorpay Test Mode order was created after policy authorization.", {
-    razorpayOrderId,
-  });
+  addAudit(id, "gateway", "RAZORPAY_ORDER_CREATED", "A Razorpay Test Mode order was created after policy authorization.", { razorpayOrderId });
   return transaction;
 }
 
 export function markCheckoutStarted(id: string): Transaction {
-  const transaction = transitionTransaction(id, "checkout_started");
+  const transaction = getTransaction(id);
+  if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+  if (transaction.state === "checkout_started") return transaction;
+  transitionTransaction(id, "checkout_started");
   addAudit(id, "gateway", "CHECKOUT_STARTED", "The transaction is ready for Razorpay Standard Checkout.");
-  return transaction;
+  return getTransaction(id)!;
 }
 
 export function recordPayment(id: string, paymentId: string, status: "authorized" | "captured" | "failed"): Transaction {
@@ -263,35 +267,45 @@ export function recordPayment(id: string, paymentId: string, status: "authorized
   transactions.set(id, transaction);
 
   if (status === "failed") {
-    transitionTransaction(id, "payment_failed");
+    if (transaction.state !== "payment_failed") transitionTransaction(id, "payment_failed");
     addAudit(id, "razorpay", "PAYMENT_FAILED", "Razorpay reported a failed payment.", { razorpayPaymentId: paymentId });
-    return transaction;
+    return getTransaction(id)!;
   }
 
   if (transaction.state === "checkout_started") transitionTransaction(id, "payment_authorized");
   if (status === "captured" && getTransaction(id)?.state === "payment_authorized") transitionTransaction(id, "payment_captured");
+  addAudit(id, "razorpay", status === "captured" ? "PAYMENT_CAPTURED" : "PAYMENT_AUTHORIZED", `Razorpay reported the payment as ${status}.`, { razorpayPaymentId: paymentId });
   return getTransaction(id)!;
 }
 
 export function recordPaymentVerified(id: string): Transaction {
   const transaction = getTransaction(id);
   if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+  if (transaction.state === "payment_verified" || transaction.state === "order_confirmed") return transaction;
   if (transaction.state !== "payment_captured") throw new Error("PAYMENT_NOT_CAPTURED");
   transitionTransaction(id, "payment_verified");
   addAudit(id, "gateway", "PAYMENT_VERIFIED", "Razorpay payment details and checkout signature were verified server-side.", {
     razorpayPaymentId: transaction.razorpayPaymentId ?? null,
   });
-  return transaction;
+  return getTransaction(id)!;
 }
 
 export function confirmOrder(id: string): Transaction {
-  const transaction = transitionTransaction(id, "order_confirmed");
+  const transaction = getTransaction(id);
+  if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+  if (transaction.state === "order_confirmed") return transaction;
+  if (transaction.state !== "payment_verified") throw new Error("PAYMENT_NOT_VERIFIED");
+  transitionTransaction(id, "order_confirmed");
   addAudit(id, "merchant", "ORDER_CONFIRMED", "The merchant order was confirmed only after payment verification.");
-  return transaction;
+  return getTransaction(id)!;
 }
 
 export function getTransaction(id: string): Transaction | undefined {
   return transactions.get(id);
+}
+
+export function findTransactionByRazorpayOrderId(orderId: string): Transaction | undefined {
+  return [...transactions.values()].find((transaction) => transaction.razorpayOrderId === orderId);
 }
 
 export function getTimeline(id: string): AuditEvent[] {
