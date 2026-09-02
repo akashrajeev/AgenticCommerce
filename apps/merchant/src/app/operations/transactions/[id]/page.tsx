@@ -1,4 +1,5 @@
 import Link from "next/link";
+import styles from "./page.module.css";
 
 export const dynamic = "force-dynamic";
 
@@ -48,49 +49,49 @@ export default async function TransactionDetailPage({ params }: { params: Promis
         <div className="ops-nav"><Link href="/operations">Transactions</Link><span className="mode-pill">Razorpay Test Mode</span></div>
       </header>
 
-      <div className="ops-container detail-container">
-        <Link href="/operations" className="back-link">← All transactions</Link>
-        <div className="detail-title">
+      <div className={`ops-container ${styles.page}`}>
+        <Link href="/operations" className={styles.back}>← All transactions</Link>
+        <div className={styles.title}>
           <div><p className="eyebrow">Transaction detail</p><h1>{id}</h1></div>
-          <span className={`detail-state state-${String(transaction.state).replaceAll("_", "-")}`}>{String(transaction.state).replaceAll("_", " ")}</span>
+          <span className={styles.state}>{String(transaction.state).replaceAll("_", " ")}</span>
         </div>
 
-        <section className="detail-grid">
-          <div className="detail-card wide">
+        <section className={styles.grid}>
+          <div className={`${styles.card} ${styles.wide}`}>
             <p className="eyebrow">Purchase intent</p>
             <h2>{intent.reason ?? "—"}</h2>
-            <div className="detail-facts">
-              <div><span>Product</span><strong>{intent.productId ?? "—"}</strong></div>
-              <div><span>Quantity</span><strong>{intent.quantity ?? "—"}</strong></div>
-              <div><span>Maximum spend</span><strong>{typeof intent.maxSpendPaise === "number" ? money(intent.maxSpendPaise) : "—"}</strong></div>
-              <div><span>Quoted total</span><strong>{typeof quote.totalPaise === "number" ? money(quote.totalPaise) : "—"}</strong></div>
+            <div className={styles.facts}>
+              <div className={styles.fact}><span>Product</span><strong>{intent.productId ?? "—"}</strong></div>
+              <div className={styles.fact}><span>Quantity</span><strong>{intent.quantity ?? "—"}</strong></div>
+              <div className={styles.fact}><span>Maximum spend</span><strong>{typeof intent.maxSpendPaise === "number" ? money(intent.maxSpendPaise) : "—"}</strong></div>
+              <div className={styles.fact}><span>Quoted total</span><strong>{typeof quote.totalPaise === "number" ? money(quote.totalPaise) : "—"}</strong></div>
             </div>
           </div>
 
-          <div className="detail-card">
+          <div className={styles.card}>
             <p className="eyebrow">Payment references</p>
-            <dl className="ref-list">
+            <dl className={styles.refList}>
               <div><dt>Razorpay order</dt><dd>{String(transaction.razorpayOrderId ?? "Not created")}</dd></div>
               <div><dt>Payment</dt><dd>{String(transaction.razorpayPaymentId ?? "Not received")}</dd></div>
               <div><dt>Currency</dt><dd>{String(quote.currency ?? "INR")}</dd></div>
             </dl>
           </div>
 
-          <div className="detail-card">
+          <div className={styles.card}>
             <p className="eyebrow">Policy decision</p>
-            <div className={`decision-banner ${policy?.decision === "BLOCK" ? "blocked" : "allowed"}`}>{policy?.decision ?? "PENDING"}</div>
-            <div className="compact-checks">{policy?.checks?.map((check) => <div key={String(check.rule)}><span>{String(check.result)}</span><strong>{String(check.rule).replaceAll("_", " ")}</strong></div>) ?? <span>Awaiting evaluation.</span>}</div>
+            <div className={`${styles.banner} ${policy?.decision === "BLOCK" ? styles.blocked : styles.allowed}`}>{policy?.decision ?? "PENDING"}</div>
+            <div className={styles.checks}>{policy?.checks?.map((check) => <div className={styles.check} key={String(check.rule)}><span>{String(check.result)}</span><strong>{String(check.rule).replaceAll("_", " ")}</strong></div>) ?? <span>Awaiting evaluation.</span>}</div>
           </div>
         </section>
 
-        <section className="detail-card audit-card">
-          <div className="audit-heading"><div><p className="eyebrow">Audit trail</p><h2>Every transition, recorded.</h2></div><span>{events.length} events</span></div>
-          <div className="audit-table">
+        <section className={`${styles.card} ${styles.audit}`}>
+          <div className={styles.auditHeader}><div><p className="eyebrow">Audit trail</p><h2>Every transition, recorded.</h2></div><span>{events.length} events</span></div>
+          <div className={styles.auditRows}>
             {events.map((event) => (
-              <div className="audit-row" key={String(event.id)}>
-                <div className="audit-time">{new Date(String(event.createdAt)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
+              <div className={styles.auditRow} key={String(event.id)}>
+                <div className={styles.auditTime}>{new Date(String(event.createdAt)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
                 <div><strong>{String(event.action).replaceAll("_", " ")}</strong><p>{String(event.reason)}</p></div>
-                <span className="audit-actor">{String(event.actor).replaceAll("_", " ")}</span>
+                <span className={styles.auditActor}>{String(event.actor).replaceAll("_", " ")}</span>
               </div>
             ))}
           </div>
