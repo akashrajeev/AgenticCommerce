@@ -112,9 +112,40 @@ export async function POST(request: Request) {
     }),
   });
 
-  const responseBody = (await response.json().catch(() => null)) as { output_text?: string; error?: { message?: string } } | null;
-  if (!response.ok || !responseBody?.output_text) {
-    return Response.json({ error: "MODEL_PLANNING_FAILED", detail: responseBody?.error?.message ?? "The model did not return a purchase plan." }, { status: 502 });
+  const responseBody = (await response.json().catch(() => null)) as {
+    output_text?: string;
+    output?: Array<{
+      type?: string;
+      content?: Array<{
+        type?: string;
+        text?: string;
+      }>;
+    }>;
+    error?: { message?: string };
+  } | null;
+
+  if (!response.ok) {
+    return Response.json({ error: "MODEL_PLANNING_FAILED", detail: responseBody?.error?.message ?? "The model request failed." }, { status: 502 });
+  }
+
+  const modelText =
+    typeof responseBody?.output_text === "string" && responseBody.output_text.trim()
+      ? responseBody.output_text.trim()
+      : (responseBody?.output ?? [])
+          .flatMap((item) => item.content ?? [])
+          .filter((content) => content.type === "output_text" || content.type === "text")
+          .map((content) => content.text)
+          .find((text): text is string => typeof text === "string" && Boolean(text.trim()))
+          ?.trim() ?? "";
+
+  if (!modelText) {
+    return Response.json(
+      {
+        error: "MODEL_PLANNING_FAILED",
+        detail: "The model returned no usable purchase-plan content.",
+      },
+      { status: 502 },
+    );
   }
 
   let plan: {
@@ -126,7 +157,7 @@ export async function POST(request: Request) {
   };
 
   try {
-    plan = JSON.parse(responseBody.output_text) as typeof plan;
+    plan = JSON.parse(modelText) as typeof plan;
   } catch {
     return Response.json({ error: "MODEL_PLAN_INVALID" }, { status: 502 });
   }
