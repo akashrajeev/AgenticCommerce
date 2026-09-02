@@ -20,7 +20,7 @@ export default function MerchantHomePage() {
           <nav className="nav" aria-label="Primary navigation">
             <a href="#shop">Shop</a>
             <a href="#agent-commerce">For agents</a>
-            <a href="#operations">Operations</a>
+            <Link href="/operations">Operations</Link>
           </nav>
           <div className="header-actions">
             <span className="mode-pill">Razorpay Test Mode</span>
