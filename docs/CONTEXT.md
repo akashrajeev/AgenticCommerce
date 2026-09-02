@@ -16,13 +16,13 @@ Agentic commerce platform for Razorpay Track 01: AI Growth & Agentic Commerce.
 
 ## Current Architecture
 
-AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Product Decision -> PurchaseIntent -> Policy Engine -> Transaction Authority -> Razorpay -> Verification -> Webhooks -> Merchant Order -> Audit Trail
+AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Model-backed Product Decision -> PurchaseIntent -> Deterministic Policy Engine -> Transaction Authority -> Razorpay Test Mode -> Server Verification -> Webhooks -> Merchant Order -> Audit Trail
 
 ## Trust Zones
 
-1. AI / probabilistic: may read catalogs, compare options, and propose a `PurchaseIntent`.
-2. MANDATE trusted control plane: deterministic policy, transaction state, Razorpay calls, verification, and audit.
-3. Razorpay payment rail: Test Mode Orders, Checkout, Payments, and Webhooks.
+1. AI / probabilistic: reads the live merchant contract/catalog and produces a structured product plan. It cannot authorize payment.
+2. MANDATE trusted control plane: revalidates product, inventory and quote; enforces deterministic policy; owns transaction state; calls Razorpay; verifies payments/webhooks; confirms merchant orders.
+3. Razorpay payment rail: Test Mode Orders, Standard Checkout, Payments, capture and Webhooks.
 
 ## Security Invariants
 
@@ -31,112 +31,166 @@ AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Product Decision -> 
 - Unverified payment -> confirmed order = FORBIDDEN.
 - Policy BLOCK -> Razorpay order = FORBIDDEN.
 - AI -> spending limit modification = FORBIDDEN.
-- Razorpay API key secret must remain server-side only.
-- Webhook signature verification must use the raw request body.
-- Duplicate webhook events must be idempotently ignored by event id.
-- Webhook event ordering must not be assumed.
+- Razorpay API secret and webhook secret must remain server-side.
+- Checkout signature verification must be performed by the gateway.
+- Webhook signature verification uses the raw request body.
+- Duplicate webhook events must be idempotently handled.
+- Webhook ordering must not be assumed.
+- Merchant order confirmation is performed by the trusted gateway using an internal shared secret.
 
-## Current Razorpay Findings
+## Razorpay Findings
 
-- Razorpay REST APIs are JSON APIs. Most API calls use `https://api.razorpay.com/v1`.
-- Razorpay APIs use Basic Authentication with `key_id:key_secret`.
-- Test Mode is a sandbox replica. No real money is used, and test entities do not appear in Live Mode.
-- Test and Live keys are separate. Test keys must be generated in Test Mode and Live keys in Live Mode.
-- Orders must be created server-side before Checkout. The `order_id` ties Checkout to a server-created amount and reduces tampering.
-- Order states confirmed: `created`, `attempted`, `paid`.
-- Payment states confirmed: `created`, `authorized`, `captured`, `refunded`, `failed`.
-- Payment APIs fetch payment details and capture authorized payments; they are not used to collect payments.
-- Checkout success returns `razorpay_payment_id`, `razorpay_order_id`, and `razorpay_signature`; the server must verify the signature.
-- Webhooks are server-to-server notifications, separate from Checkout `callback_url`.
-- Webhook endpoints must return 2xx within 5 seconds or Razorpay retries using exponential backoff for up to 24 hours before disabling the webhook.
+Razorpay REST APIs use JSON and Basic Authentication against the v1 API base. Test Mode is separate from Live and does not move real money. Orders are created server-side before Standard Checkout; the order ID is passed to Checkout. Checkout returns payment identifiers and a signature that the server verifies. Webhooks are server-to-server notifications and require signature validation and fast 2xx handling.
 
-Sources:
+Current relevant implementation:
 
-- https://razorpay.com/docs/build/llm-docs/api.md
-- https://razorpay.com/docs/build/llm-docs/api/authentication.md
-- https://razorpay.com/docs/build/llm-docs/payments/dashboard/test-live-modes.md
-- https://razorpay.com/docs/build/llm-docs/payments/dashboard/account-settings/api-keys.md
-- https://razorpay.com/docs/build/llm-docs/payments/orders.md
-- https://razorpay.com/docs/build/llm-docs/payments/payments.md
-- https://razorpay.com/docs/build/llm-docs/payments/payment-gateway/web-integration/standard/integration-steps.md
-- https://razorpay.com/docs/build/llm-docs/webhooks.md
-- https://razorpay.com/docs/build/llm-docs/webhooks/validate-test.md
+- `POST /v1/orders` via `apps/gateway/src/razorpay.ts`.
+- `GET /v1/orders/:id`.
+- `GET /v1/orders/:id/payments`.
+- `GET /v1/payments/:id`.
+- `POST /v1/payments/:id/capture`.
+- Checkout signature verification with HMAC SHA256 over `order_id|razorpay_payment_id`.
+- Webhook signature verification using `X-Razorpay-Signature` and the raw body.
+- Test Mode public Key ID is returned only to the checkout client; the secret stays in the gateway.
 
-## Current Razorpay Capabilities
+Official sources are retained in `docs/razorpay/`.
 
-- Create Orders: `POST /v1/orders`.
-- Fetch Orders: `GET /v1/orders/:id`.
-- Fetch payments for an order: `GET /v1/orders/:id/payments`.
-- Fetch Payments: `GET /v1/payments/:id`.
-- Capture Payments: `POST /v1/payments/:id/capture`.
-- Standard Checkout accepts a server-created `order_id`.
-- Checkout signature verification uses `hmac_sha256(order_id + "|" + razorpay_payment_id, key_secret)`.
-- Webhook signature verification uses `X-Razorpay-Signature` and HMAC SHA256 over the raw webhook body with `RAZORPAY_WEBHOOK_SECRET`.
-- Test Mode card payments can be tested with official test cards and the mock bank success/failure page.
+## MCP Findings
 
-## Current MCP Findings
+- Official Remote MCP endpoint: `https://mcp.razorpay.com/mcp`.
+- Official local Docker image: `razorpay/mcp`.
+- The current official MCP server exposes 35+ tools across payments, orders, payment links, refunds, QR codes, settlements, payouts, saved tokens and Standard Checkout helpers.
+- MCP includes money-affecting operations. Therefore direct AI -> Razorpay MCP payment execution is forbidden for MANDATE.
+- MCP can be used for development assistance, read-only inspection, or a constrained audited demo path behind the same policy/transaction authority.
 
-- Razorpay has an official MCP Server for AI tools.
-- Official remote endpoint: `https://mcp.razorpay.com/mcp`.
-- Official GitHub repository: https://github.com/razorpay/razorpay-mcp-server.
-- Remote MCP can be configured with a Basic merchant token derived from API key and secret, or via OAuth where supported.
-- Local MCP can run via Docker image `razorpay/mcp` with `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`.
-- MCP tool areas include Payments, Orders, Payment Links, Refunds, QR Codes, Settlements, Payouts, saved tokens, and Standard Checkout integration helpers.
-- MCP includes money-affecting tools such as `create_order`, `capture_payment`, `create_payment_link`, and local-only write tools such as `create_refund`.
-- For MANDATE, MCP must not be in the production payment path because it can give an AI tool direct financial capability. MCP is allowed for developer assistance, read-only inspection, and optional demos only when routed through the same policy/audit boundary.
-
-Sources:
-
-- https://razorpay.com/docs/build/llm-docs/mcp-server.md
-- https://razorpay.com/docs/build/llm-docs/mcp-server/integrations.md
-- https://razorpay.com/docs/build/llm-docs/mcp-server/configuration.md
-- https://razorpay.com/docs/build/llm-docs/mcp-server/oauth.md
-- https://github.com/razorpay/razorpay-mcp-server
+See `docs/razorpay/mcp.md` for the research and sources.
 
 ## Implemented
 
-- Monorepo scaffold with npm workspaces.
-- `apps/merchant`: Next.js app with landing surface and `/api/health`.
-- `apps/buyer`: Next.js app with landing surface and `/api/health`.
-- `apps/gateway`: Express service with `/health`.
-- Shared `types`, `schemas`, and `shared` packages.
-- TypeScript, ESLint, Prettier, Docker Compose PostgreSQL skeleton.
-- Environment templates for apps and gateway.
-- Persistent Razorpay and architecture research docs.
+### Merchant
 
-## Not Implemented
+- Modern ecommerce storefront at `apps/merchant`.
+- Structured catalog and realistic seeded products.
+- Agent-readable manifest at `/.well-known/agent-commerce`.
+- Agent catalog/product/inventory endpoints.
+- Deterministic checkout preview and quote generation.
+- Quote revalidation endpoint.
+- Trusted merchant-order confirmation endpoint.
+- Merchant operations console at `/operations`.
 
-- Prisma transaction/audit schema beyond empty starter file.
-- Merchant discovery API.
-- Agent-readable catalog API.
-- AI buyer orchestration.
-- PurchaseIntent API.
+### Buyer
+
+- Modern transaction workspace UI.
+- Model-backed structured purchase planning via `/api/agent/purchase-plan`.
+- The buyer planner reads the merchant manifest/catalog over HTTP rather than importing merchant source code.
+- Model output is constrained with JSON Schema and product IDs are validated against the live catalog.
+- Hard spending limit is supplied by the application and is not editable by the model.
+- Real Razorpay Standard Checkout launcher.
+
+### Gateway
+
 - Deterministic policy engine.
-- Razorpay Orders API integration.
-- Razorpay Standard Checkout frontend.
-- Checkout signature verification endpoint.
-- Webhook raw-body endpoint and idempotency store.
-- Merchant order management.
-- Dockerfiles for all apps.
+- Server-side merchant revalidation.
+- Strict transaction state machine.
+- Transaction/audit timeline.
+- Real Razorpay REST adapter.
+- Razorpay order creation, payment retrieval, capture and verification.
+- Raw-body webhook endpoint.
+- Webhook signature validation.
+- Basic idempotency protection for duplicate webhook deliveries.
+- Merchant order reconciliation after payment verification.
 
-## Decisions
+### Infrastructure
 
-- Use Razorpay REST APIs from the gateway for trusted transaction execution.
-- Do not give the LLM direct Razorpay authority.
-- Keep the policy engine deterministic and server-side.
-- Treat webhooks as required reconciliation, not optional notifications.
-- Keep transaction state server-controlled.
-- Use Razorpay MCP for development assistance or constrained inspection, not as a production payment bypass.
+- Dockerfiles for merchant, buyer and gateway.
+- Docker Compose services for PostgreSQL, merchant, buyer and gateway.
+- CI workflow for npm install/typecheck/build.
+- Environment templates with Test Mode credentials kept out of the frontend.
+
+## Current Limitations
+
+- Transaction, audit, webhook-deduplication and merchant-order storage are currently in-memory maps rather than PostgreSQL-backed persistence. PostgreSQL is present in Compose but not yet the source of truth.
+- The checkout quote store is currently in-memory inside the merchant app.
+- The current buyer model integration uses direct Responses API HTTP calls with `OPENAI_API_KEY`; the official OpenAI SDK is not required.
+- MCP is documented/configurable but intentionally not an unrestricted production payment path.
+- Webhook persistence/idempotency should move from process memory to PostgreSQL before production use.
+- The Docker/Test Mode path still needs a real local verification by the developer with Test credentials and a public webhook tunnel/staging URL.
+
+## Important Environment Variables
+
+Gateway:
+
+- `RAZORPAY_KEY_ID`
+- `RAZORPAY_KEY_SECRET`
+- `RAZORPAY_WEBHOOK_SECRET`
+- `MERCHANT_APP_ORIGIN`
+- `MERCHANT_INTERNAL_URL`
+- `BUYER_APP_ORIGIN`
+- `INTERNAL_GATEWAY_SECRET`
+
+Buyer server:
+
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `OPENAI_BASE_URL`
+- `MERCHANT_INTERNAL_URL`
+
+## Current Transaction Flow
+
+USER REQUEST
+-> buyer model reads merchant manifest + catalog
+-> structured product plan
+-> checkout quote
+-> PurchaseIntent
+-> gateway re-fetches product/inventory/quote
+-> policy evaluation
+-> BLOCK or AUTHORIZED
+-> authorized transaction creates real Razorpay Test Mode Order
+-> Standard Checkout
+-> Checkout returns payment identifiers
+-> gateway verifies signature and retrieves payment
+-> authorized payment is captured when required
+-> payment captured/verified
+-> Razorpay webhook reconciles state
+-> merchant order confirmed
+-> audit timeline updated
+
+## UI Principle
+
+Both merchant and buyer surfaces must remain modern, restrained and product-like.
+
+Avoid generic AI visuals:
+
+- no purple AI gradients
+- no glassmorphism
+- no glowing cards
+- no giant "AI-powered" hero copy
+- no robot illustrations
+- no fake model-thinking animations
+- no emoji-heavy interface
+
+Prefer:
+
+- typography-led hierarchy
+- neutral surfaces
+- subtle borders
+- compact status indicators
+- realistic commerce terminology
+- clear transaction identifiers
+- useful density
 
 ## Known Risks
 
-- Webhooks can be duplicated and delivered out of order.
-- Webhook endpoints must be public and on ports 80/443; localhost requires a supported tunnel or staging host.
-- Webhook handlers must respond within 5 seconds.
-- Test and Live keys can be mixed accidentally; Checkout and Orders must use matching mode keys.
-- Authorized payments auto-refund if not captured within Razorpay's documented capture window.
-- Current Next.js dependency tree has an npm audit warning via PostCSS; npm's automatic fix requires a breaking Next 16 upgrade.
+- Current state is in-memory and will reset on process restart.
+- Webhook handlers can be duplicated and out of order; production persistence must replace in-memory dedupe.
+- Webhook endpoints need a public URL for external Razorpay delivery; localhost requires a supported tunnel/staging host.
+- Test and Live credentials must never be mixed.
+- Authorized payments must be captured according to the merchant's capture configuration.
+- OpenAI model availability/cost can change; keep the model configurable.
 
 ## Next Step
 
-Implement the deterministic gateway foundation: Prisma models for `PurchaseIntent`, `Transaction`, `TransactionEvent`, `WebhookEvent`, and `MerchantOrder`; transaction state machine; policy engine that authorizes or blocks intents before any Razorpay order can be created.
+1. Replace the in-memory transaction/audit/webhook/order/quote stores with persistent PostgreSQL repositories while preserving the current public APIs and state machine.
+2. Add automated unit/integration tests for policy invariants, transaction transitions, signature verification and webhook idempotency.
+3. Perform a real Razorpay Test Mode run with developer-provided Test Mode credentials and webhook configuration.
+4. Add the final Transaction Command Center and failure simulator after the persistent core is stable.
