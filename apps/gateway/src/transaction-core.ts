@@ -80,73 +80,71 @@ export async function loadMerchantSnapshot(input: PurchaseIntentInput): Promise<
   const inventoryBody = (await inventoryResponse.json()) as { inventory: number };
   const quoteBody = (await quoteResponse.json()) as { quote: CheckoutQuote };
 
-  return {
-    product: productBody.product,
-    inventory: inventoryBody.inventory,
-    quote: quoteBody.quote,
-  };
+  return { product: productBody.product, inventory: inventoryBody.inventory, quote: quoteBody.quote };
 }
 
-export function evaluatePolicy(
-  input: PurchaseIntentInput,
-  snapshot: MerchantSnapshot,
-): PolicyDecision {
+export function evaluatePolicy(input: PurchaseIntentInput, snapshot: MerchantSnapshot): PolicyDecision {
   const checks: PolicyCheck[] = [];
   const now = Date.now();
   const quantity = input.quantity;
   const total = snapshot.quote.totalPaise;
 
+  const spendPass = total <= input.maxSpendPaise;
   checks.push({
     rule: "MAX_SPEND",
-    result: total <= input.maxSpendPaise ? "PASS" : "FAIL",
+    result: spendPass ? "PASS" : "FAIL",
     observed: `₹${(total / 100).toFixed(0)}`,
     expected: `≤ ₹${(input.maxSpendPaise / 100).toFixed(0)}`,
-    reason: total <= input.maxSpendPaise ? "Quote is within the user's spending limit." : "Quote exceeds the user's spending limit.",
+    reason: spendPass ? "Quote is within the user's spending limit." : "Quote exceeds the user's spending limit.",
   });
 
+  const quantityPass = quantity <= config.maxQuantity;
   checks.push({
     rule: "QUANTITY_LIMIT",
-    result: quantity <= config.maxQuantity ? "PASS" : "FAIL",
+    result: quantityPass ? "PASS" : "FAIL",
     observed: String(quantity),
     expected: `≤ ${config.maxQuantity}`,
-    reason: quantity <= config.maxQuantity ? "Requested quantity is within the policy limit." : "Requested quantity exceeds the policy limit.",
+    reason: quantityPass ? "Requested quantity is within the policy limit." : "Requested quantity exceeds the policy limit.",
   });
 
+  const inventoryPass = snapshot.inventory >= quantity;
   checks.push({
     rule: "INVENTORY",
-    result: snapshot.inventory >= quantity ? "PASS" : "FAIL",
+    result: inventoryPass ? "PASS" : "FAIL",
     observed: `${snapshot.inventory} available`,
     expected: `${quantity} required`,
-    reason: snapshot.inventory >= quantity ? "Inventory can satisfy the request." : "There is not enough inventory to satisfy the request.",
+    reason: inventoryPass ? "Inventory can satisfy the request." : "There is not enough inventory to satisfy the request.",
   });
 
+  const merchantPass = snapshot.quote.merchantId === input.merchantId;
   checks.push({
     rule: "MERCHANT",
-    result: snapshot.quote.merchantId === input.merchantId ? "PASS" : "FAIL",
+    result: merchantPass ? "PASS" : "FAIL",
     observed: snapshot.quote.merchantId,
     expected: input.merchantId,
-    reason: snapshot.quote.merchantId === input.merchantId ? "Quote belongs to the requested merchant." : "Quote merchant does not match the purchase intent.",
+    reason: merchantPass ? "Quote belongs to the requested merchant." : "Quote merchant does not match the purchase intent.",
   });
 
+  const quotePass = new Date(snapshot.quote.expiresAt).getTime() > now;
   checks.push({
     rule: "QUOTE_VALIDITY",
-    result: new Date(snapshot.quote.expiresAt).getTime() > now ? "PASS" : "FAIL",
+    result: quotePass ? "PASS" : "FAIL",
     observed: snapshot.quote.expiresAt,
     expected: "expires in the future",
-    reason: new Date(snapshot.quote.expiresAt).getTime() > now ? "Quote is still valid." : "Quote has expired.",
+    reason: quotePass ? "Quote is still valid." : "Quote has expired.",
   });
 
   const lineItem = snapshot.quote.lineItems[0];
-  const amountMatchesProduct =
+  const amountPass =
     lineItem?.productId === input.productId &&
     lineItem?.quantity === input.quantity &&
     lineItem?.unitPricePaise === snapshot.product.pricePaise;
   checks.push({
     rule: "AMOUNT_INTEGRITY",
-    result: amountMatchesProduct ? "PASS" : "FAIL",
+    result: amountPass ? "PASS" : "FAIL",
     observed: lineItem ? `${lineItem.quantity} × ${lineItem.unitPricePaise}` : "missing line item",
     expected: `${input.quantity} × ${snapshot.product.pricePaise}`,
-    reason: amountMatchesProduct ? "Server quote matches the current product price and quantity." : "Quote line item does not match the current product data.",
+    reason: amountPass ? "Server quote matches the current product price and quantity." : "Quote line item does not match the current product data.",
   });
 
   return {
@@ -213,11 +211,8 @@ export async function proposeTransaction(input: PurchaseIntentInput): Promise<Tr
     policy.decision === "ALLOW" ? "All mandatory transaction policies passed." : "At least one mandatory transaction policy failed.",
   );
 
-  if (policy.decision === "ALLOW") {
-    transitionTransaction(id, "policy_authorized");
-  } else {
-    transitionTransaction(id, "policy_blocked");
-  }
+  if (policy.decision === "ALLOW") transitionTransaction(id, "policy_authorized");
+  else transitionTransaction(id, "policy_blocked");
 
   return transactions.get(id)!;
 }
@@ -242,10 +237,67 @@ export function transitionTransaction(id: string, nextState: TransactionState): 
   return current;
 }
 
+export function attachRazorpayOrder(id: string, razorpayOrderId: string): Transaction {
+  const transaction = getTransaction(id);
+  if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+  if (transaction.state !== "policy_authorized") throw new Error("TRANSACTION_NOT_AUTHORIZED");
+  transaction.razorpayOrderId = razorpayOrderId;
+  transactions.set(id, transaction);
+  transitionTransaction(id, "razorpay_order_created");
+  addAudit(id, "gateway", "RAZORPAY_ORDER_CREATED", "A Razorpay Test Mode order was created after policy authorization.", {
+    razorpayOrderId,
+  });
+  return transaction;
+}
+
+export function markCheckoutStarted(id: string): Transaction {
+  const transaction = transitionTransaction(id, "checkout_started");
+  addAudit(id, "gateway", "CHECKOUT_STARTED", "The transaction is ready for Razorpay Standard Checkout.");
+  return transaction;
+}
+
+export function recordPayment(id: string, paymentId: string, status: "authorized" | "captured" | "failed"): Transaction {
+  const transaction = getTransaction(id);
+  if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+  transaction.razorpayPaymentId = paymentId;
+  transactions.set(id, transaction);
+
+  if (status === "failed") {
+    transitionTransaction(id, "payment_failed");
+    addAudit(id, "razorpay", "PAYMENT_FAILED", "Razorpay reported a failed payment.", { razorpayPaymentId: paymentId });
+    return transaction;
+  }
+
+  if (transaction.state === "checkout_started") transitionTransaction(id, "payment_authorized");
+  if (status === "captured" && getTransaction(id)?.state === "payment_authorized") transitionTransaction(id, "payment_captured");
+  return getTransaction(id)!;
+}
+
+export function recordPaymentVerified(id: string): Transaction {
+  const transaction = getTransaction(id);
+  if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+  if (transaction.state !== "payment_captured") throw new Error("PAYMENT_NOT_CAPTURED");
+  transitionTransaction(id, "payment_verified");
+  addAudit(id, "gateway", "PAYMENT_VERIFIED", "Razorpay payment details and checkout signature were verified server-side.", {
+    razorpayPaymentId: transaction.razorpayPaymentId ?? null,
+  });
+  return transaction;
+}
+
+export function confirmOrder(id: string): Transaction {
+  const transaction = transitionTransaction(id, "order_confirmed");
+  addAudit(id, "merchant", "ORDER_CONFIRMED", "The merchant order was confirmed only after payment verification.");
+  return transaction;
+}
+
 export function getTransaction(id: string): Transaction | undefined {
   return transactions.get(id);
 }
 
 export function getTimeline(id: string): AuditEvent[] {
   return audit.get(id) ?? [];
+}
+
+export function getAllTransactions(): Transaction[] {
+  return [...transactions.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
