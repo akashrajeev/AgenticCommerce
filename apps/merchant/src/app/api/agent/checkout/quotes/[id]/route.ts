@@ -1,4 +1,4 @@
-import { getQuote } from "../../../../../../../lib/catalog";
+import { getQuote } from "../../../../../../lib/catalog";
 
 export async function GET(
   _request: Request,
