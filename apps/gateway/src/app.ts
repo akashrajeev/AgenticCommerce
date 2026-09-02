@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { PurchaseIntent } from "@mandate/types";
+import type { PurchaseIntent, Transaction } from "@mandate/types";
 import { createHealthStatus } from "@mandate/shared";
 import cors from "cors";
 import express from "express";
@@ -20,6 +20,7 @@ import {
 import {
   capturePayment,
   createOrder,
+  fetchOrderPayments,
   fetchPayment,
   getPublicConfig,
   verifyCheckoutSignature,
@@ -46,10 +47,42 @@ function parsePurchaseIntent(body: unknown): Omit<PurchaseIntent, "id"> {
   return { merchantId, productId, quoteId, reason, quantity, maxSpendPaise };
 }
 
-function getTransactionOrThrow(id: string) {
+function getTransactionOrThrow(id: string): Transaction {
   const transaction = getTransaction(id);
   if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
   return transaction;
+}
+
+async function confirmMerchantOrder(transaction: Transaction) {
+  if (!transaction.razorpayOrderId || !transaction.razorpayPaymentId) throw new Error("PAYMENT_REFERENCE_INCOMPLETE");
+  const base = config.merchantAppOrigin.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/agent/orders/confirm`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-mandate-gateway-secret": config.internalGatewaySecret,
+    },
+    body: JSON.stringify({
+      transactionId: transaction.id,
+      productId: transaction.intent.productId,
+      quantity: transaction.intent.quantity,
+      amountPaise: transaction.quote.totalPaise,
+      razorpayOrderId: transaction.razorpayOrderId,
+      razorpayPaymentId: transaction.razorpayPaymentId,
+    }),
+  });
+  if (!response.ok) throw new Error("MERCHANT_ORDER_CONFIRMATION_FAILED");
+  return response.json();
+}
+
+async function reconcileCapturedPayment(transactionId: string, paymentId: string) {
+  const transaction = getTransactionOrThrow(transactionId);
+  recordPayment(transactionId, paymentId, "captured");
+  if (getTransaction(transactionId)?.state === "payment_captured") recordPaymentVerified(transactionId);
+  const verified = getTransactionOrThrow(transactionId);
+  if (verified.state !== "payment_verified") return verified;
+  await confirmMerchantOrder(verified);
+  return confirmOrder(transactionId);
 }
 
 export function createApp() {
@@ -59,7 +92,7 @@ export function createApp() {
   app.use(cors({ origin: [config.buyerAppOrigin, config.merchantAppOrigin] }));
 
   // Webhooks must be verified against the exact raw request body.
-  app.post("/v1/webhooks/razorpay", express.raw({ type: "application/json", limit: "256kb" }), (request, response) => {
+  app.post("/v1/webhooks/razorpay", express.raw({ type: "application/json", limit: "256kb" }), async (request, response) => {
     const rawBody = Buffer.isBuffer(request.body) ? request.body.toString("utf8") : "";
     const signature = request.header("x-razorpay-signature") ?? "";
 
@@ -77,7 +110,7 @@ export function createApp() {
     let payload: {
       event?: string;
       payload?: {
-        payment?: { entity?: { id?: string; order_id?: string; status?: "created" | "authorized" | "captured" | "refunded" | "failed"; error_code?: string | null; error_description?: string | null } };
+        payment?: { entity?: { id?: string; order_id?: string; status?: "created" | "authorized" | "captured" | "refunded" | "failed" } };
         order?: { entity?: { id?: string; status?: string } };
       };
     };
@@ -99,14 +132,13 @@ export function createApp() {
         recordPayment(transaction.id, payment.id, "failed");
       } else if (event === "payment.authorized") {
         recordPayment(transaction.id, payment.id, "authorized");
-      } else if (event === "payment.captured" || event === "order.paid") {
-        recordPayment(transaction.id, payment.id, "captured");
-        const refreshed = getTransaction(transaction.id);
-        if (refreshed?.state === "payment_captured") recordPaymentVerified(transaction.id);
-        const verified = getTransaction(transaction.id);
-        if (event === "order.paid" && verified?.state === "payment_verified") confirmOrder(transaction.id);
-        if (event === "payment.captured" && verified?.state === "payment_verified") confirmOrder(transaction.id);
+      } else if (event === "payment.captured") {
+        await reconcileCapturedPayment(transaction.id, payment.id);
       }
+    } else if (transaction && event === "order.paid") {
+      const payments = await fetchOrderPayments(transaction.razorpayOrderId!);
+      const captured = payments.items.find((item) => item.status === "captured");
+      if (captured) await reconcileCapturedPayment(transaction.id, captured.id);
     }
 
     processedWebhookKeys.add(dedupeKey);
@@ -154,11 +186,7 @@ export function createApp() {
 
       const order = await createOrder(transaction);
       const updated = attachRazorpayOrder(transaction.id, order.id);
-      response.status(201).json({
-        transaction: updated,
-        order,
-        checkout: getPublicConfig(),
-      });
+      response.status(201).json({ transaction: updated, order, checkout: getPublicConfig() });
     } catch (error) {
       const message = error instanceof Error ? error.message : "RAZORPAY_ORDER_FAILED";
       const status = message.includes("NOT_CONFIGURED") ? 503 : 422;
@@ -184,12 +212,8 @@ export function createApp() {
       const razorpayOrderId = typeof request.body?.razorpay_order_id === "string" ? request.body.razorpay_order_id : "";
       const razorpaySignature = typeof request.body?.razorpay_signature === "string" ? request.body.razorpay_signature : "";
 
-      if (!transaction.razorpayOrderId || transaction.razorpayOrderId !== razorpayOrderId) {
-        return response.status(400).json({ error: "RAZORPAY_ORDER_MISMATCH" });
-      }
-      if (!verifyCheckoutSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature)) {
-        return response.status(400).json({ error: "INVALID_CHECKOUT_SIGNATURE" });
-      }
+      if (!transaction.razorpayOrderId || transaction.razorpayOrderId !== razorpayOrderId) return response.status(400).json({ error: "RAZORPAY_ORDER_MISMATCH" });
+      if (!verifyCheckoutSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature)) return response.status(400).json({ error: "INVALID_CHECKOUT_SIGNATURE" });
 
       const payment = await fetchPayment(razorpayPaymentId);
       if (payment.order_id !== razorpayOrderId) return response.status(400).json({ error: "PAYMENT_ORDER_MISMATCH" });
@@ -198,13 +222,11 @@ export function createApp() {
         const failed = recordPayment(transaction.id, payment.id, "failed");
         return response.json({ transaction: failed, verified: false, payment });
       }
-      if (payment.status !== "authorized" && payment.status !== "captured") {
-        return response.status(409).json({ error: "PAYMENT_NOT_AUTHORIZED", payment });
-      }
+      if (payment.status !== "authorized" && payment.status !== "captured") return response.status(409).json({ error: "PAYMENT_NOT_AUTHORIZED", payment });
 
       recordPayment(transaction.id, payment.id, payment.status);
       if (payment.status === "captured" && getTransaction(transaction.id)?.state === "payment_captured") recordPaymentVerified(transaction.id);
-      return response.json({ transaction: getTransaction(transaction.id), verified: true, payment });
+      return response.json({ transaction: getTransaction(transaction.id), verified: payment.status === "captured", payment });
     } catch (error) {
       const message = error instanceof Error ? error.message : "PAYMENT_VERIFICATION_FAILED";
       response.status(message === "PAYMENT_NOT_CAPTURED" ? 409 : 422).json({ error: message });
