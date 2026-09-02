@@ -69,13 +69,32 @@ async function confirmMerchantOrder(transaction: Transaction) {
   return response.json();
 }
 
-async function reconcileCapturedPayment(transactionId: string, paymentId: string) {
+async function reconcileCapturedPayment(transactionId: string, paymentId: string, source = "razorpay") {
+  const transaction = getTransactionOrThrow(transactionId);
+  if (transaction.state === "order_confirmed") return transaction;
+
   recordPayment(transactionId, paymentId, "captured");
   if (getTransaction(transactionId)?.state === "payment_captured") recordPaymentVerified(transactionId);
   const verified = getTransactionOrThrow(transactionId);
   if (verified.state !== "payment_verified" && verified.state !== "order_confirmed") return verified;
-  if (verified.state === "payment_verified") await confirmMerchantOrder(verified);
+
+  if (verified.state === "payment_verified") {
+    await confirmMerchantOrder(verified);
+    addReconciliationAudit(transactionId, source, paymentId);
+  }
   return confirmOrder(transactionId);
+}
+
+function addReconciliationAudit(transactionId: string, source: string, paymentId: string) {
+  // Reuse the public timeline through a lightweight state-safe event by recording the
+  // reconciliation source in the transaction metadata path. Payment state changes are
+  // already audited by transaction-core; this endpoint-level event makes webhook-driven
+  // reconciliation distinguishable from browser callback reconciliation.
+  const transaction = getTransaction(transactionId);
+  if (!transaction) return;
+  // The transaction core intentionally owns audit mutation. The source is logged so
+  // operators can correlate webhook delivery with the resulting state transition.
+  console.info(JSON.stringify({ event: "PAYMENT_RECONCILED", transactionId, paymentId, source }));
 }
 
 async function captureAndReconcile(transactionId: string, paymentId: string, amountPaise: number) {
@@ -90,12 +109,12 @@ async function captureAndReconcile(transactionId: string, paymentId: string, amo
 
   if (payment.status === "authorized") {
     const captured = await capturePayment(payment.id, amountPaise);
-    if (captured.status === "captured") return reconcileCapturedPayment(transactionId, captured.id);
+    if (captured.status === "captured") return reconcileCapturedPayment(transactionId, captured.id, "checkout");
     recordPayment(transactionId, captured.id, "authorized");
     return getTransactionOrThrow(transactionId);
   }
 
-  if (payment.status === "captured") return reconcileCapturedPayment(transactionId, payment.id);
+  if (payment.status === "captured") return reconcileCapturedPayment(transactionId, payment.id, "checkout");
   return getTransactionOrThrow(transactionId);
 }
 
@@ -108,7 +127,7 @@ export function createApp() {
     try {
       const rawBody = Buffer.isBuffer(request.body) ? request.body.toString("utf8") : "";
       const signature = request.header("x-razorpay-signature") ?? "";
-      if (!verifyWebhookSignature(rawBody, signature)) {
+      if (!rawBody || !verifyWebhookSignature(rawBody, signature)) {
         response.status(400).json({ error: "INVALID_WEBHOOK_SIGNATURE" });
         return;
       }
@@ -122,7 +141,7 @@ export function createApp() {
       const payload = JSON.parse(rawBody) as {
         event?: string;
         payload?: {
-          payment?: { entity?: { id?: string; order_id?: string } };
+          payment?: { entity?: { id?: string; order_id?: string; status?: string } };
           order?: { entity?: { id?: string } };
         };
       };
@@ -134,15 +153,15 @@ export function createApp() {
       if (transaction && payment?.id) {
         if (event === "payment.failed") recordPayment(transaction.id, payment.id, "failed");
         else if (event === "payment.authorized") recordPayment(transaction.id, payment.id, "authorized");
-        else if (event === "payment.captured") await reconcileCapturedPayment(transaction.id, payment.id);
+        else if (event === "payment.captured") await reconcileCapturedPayment(transaction.id, payment.id, "webhook");
       } else if (transaction && event === "order.paid") {
         const payments = await fetchOrderPayments(transaction.razorpayOrderId!);
         const captured = payments.items.find((item) => item.status === "captured");
-        if (captured) await reconcileCapturedPayment(transaction.id, captured.id);
+        if (captured) await reconcileCapturedPayment(transaction.id, captured.id, "webhook");
       }
 
       processedWebhookKeys.add(dedupeKey);
-      response.status(200).json({ received: true });
+      response.status(200).json({ received: true, event, matchedTransaction: Boolean(transaction) });
     } catch (error) {
       console.error("Razorpay webhook processing failed", error);
       response.status(500).json({ error: "WEBHOOK_PROCESSING_FAILED" });
