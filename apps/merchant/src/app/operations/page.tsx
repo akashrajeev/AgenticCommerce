@@ -19,42 +19,46 @@ async function getTransactions() {
 
 export default async function OperationsPage() {
   const transactions = await getTransactions();
+  const blocks = transactions.filter((txn) => (txn.policy as { decision?: string } | undefined)?.decision === "BLOCK").length;
+  const razorpayOrders = transactions.filter((txn) => Boolean(txn.razorpayOrderId)).length;
+  const confirmed = transactions.filter((txn) => txn.state === "order_confirmed").length;
 
   return (
     <main className="ops-page">
       <header className="ops-header">
         <Link href="/" className="brand"><span className="brand-mark">M</span><span>Mandate Market</span></Link>
-        <div className="ops-nav"><span>Operations</span><a href="/">Storefront</a><span className="mode-pill">Razorpay Test Mode</span></div>
+        <div className="ops-nav"><span>Operations</span><Link href="/">Storefront</Link><span className="mode-pill">Razorpay Test Mode</span></div>
       </header>
 
       <div className="ops-container">
         <div className="ops-title-row">
           <div><p className="eyebrow">Merchant operations</p><h1>Transactions</h1><p className="ops-copy">A live view of purchases proposed by agents and authorized through MANDATE.</p></div>
-          <div className="ops-system"><span className="status-dot" /> System operational</div>
+          <div className="ops-system"><span className="status-dot" /> Gateway online</div>
         </div>
 
         <section className="metrics-grid">
-          <div><span>Gross merchandise value</span><strong>₹2.41L</strong><small>+12.4% this week</small></div>
-          <div><span>Agent transactions</span><strong>{transactions.length}</strong><small>Current gateway memory</small></div>
-          <div><span>Policy approvals</span><strong>{transactions.filter((txn) => txn.state === "policy_authorized" || txn.state === "order_confirmed").length}</strong><small>After deterministic checks</small></div>
-          <div><span>Payment rail</span><strong>Razorpay</strong><small>Test Mode</small></div>
+          <div><span>Transactions observed</span><strong>{transactions.length}</strong><small>Current gateway state</small></div>
+          <div><span>Policy blocks</span><strong>{blocks}</strong><small>Stopped before Razorpay</small></div>
+          <div><span>Razorpay orders</span><strong>{razorpayOrders}</strong><small>Test Mode orders created</small></div>
+          <div><span>Merchant confirmations</span><strong>{confirmed}</strong><small>Verified payment path</small></div>
         </section>
 
         <section className="transaction-table">
           <div className="table-head"><span>Transaction</span><span>Product</span><span>Amount</span><span>Policy</span><span>Payment</span><span>State</span></div>
           {transactions.length ? transactions.map((transaction) => {
+            const id = String(transaction.id);
             const intent = transaction.intent as { productId?: string } | undefined;
             const quote = transaction.quote as { totalPaise?: number } | undefined;
             const policy = transaction.policy as { decision?: string } | undefined;
             return (
-              <div className="table-row" key={String(transaction.id)}>
-                <code>{String(transaction.id)}</code>
+              <Link className="table-row" key={id} href={`/operations/transactions/${encodeURIComponent(id)}`}>
+                <code>{id}</code>
                 <span>{intent?.productId ?? "—"}</span>
                 <strong>{typeof quote?.totalPaise === "number" ? formatINR(quote.totalPaise) : "—"}</strong>
                 <span className={`mini-status ${policy?.decision === "BLOCK" ? "bad" : "good"}`}>{policy?.decision ?? "Pending"}</span>
                 <span>{transaction.razorpayPaymentId ? "Referenced" : "Not started"}</span>
                 <span className="state-text">{String(transaction.state).replaceAll("_", " ")}</span>
-              </div>
+              </Link>
             );
           }) : (
             <div className="table-empty"><strong>No agent transactions yet.</strong><span>Launch the buyer app and run the first purchase evaluation.</span></div>
