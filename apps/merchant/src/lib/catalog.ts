@@ -25,91 +25,35 @@ export const merchantManifest: MerchantManifest = {
 
 export const catalog: Product[] = [
   {
-    id: "hp-001",
-    sku: "MM-HP-001",
-    name: "SoundMax Pro",
-    slug: "soundmax-pro",
-    category: "headphones",
-    pricePaise: 399900,
-    currency: "INR",
-    rating: 4.6,
-    reviewCount: 1842,
-    inventory: 14,
+    id: "hp-001", sku: "MM-HP-001", name: "SoundMax Pro", slug: "soundmax-pro", category: "headphones",
+    pricePaise: 399900, currency: "INR", rating: 4.6, reviewCount: 1842, inventory: 14,
     shortDescription: "Wireless ANC headphones with 40-hour battery life.",
-    description:
-      "Premium over-ear wireless headphones built for long listening sessions, travel and focused work.",
-    features: [
-      "Active noise cancellation",
-      "40-hour battery",
-      "Multipoint Bluetooth",
-      "Fast USB-C charging",
-    ],
-    specifications: {
-      anc: "true",
-      batteryHours: "40",
-      connectivity: "Bluetooth 5.4",
-      weight: "248g",
-      microphone: "dual beamforming",
-    },
+    description: "Premium over-ear wireless headphones built for long listening sessions, travel and focused work.",
+    features: ["Active noise cancellation", "40-hour battery", "Multipoint Bluetooth", "Fast USB-C charging"],
+    specifications: { anc: "true", batteryHours: "40", connectivity: "Bluetooth 5.4", weight: "248g", microphone: "dual beamforming" },
     tags: ["anc", "wireless", "travel", "premium"],
   },
   {
-    id: "hp-002",
-    sku: "MM-HP-002",
-    name: "Quietline 700",
-    slug: "quietline-700",
-    category: "headphones",
-    pricePaise: 289900,
-    currency: "INR",
-    rating: 4.4,
-    reviewCount: 1118,
-    inventory: 22,
+    id: "hp-002", sku: "MM-HP-002", name: "Quietline 700", slug: "quietline-700", category: "headphones",
+    pricePaise: 289900, currency: "INR", rating: 4.4, reviewCount: 1118, inventory: 22,
     shortDescription: "Lightweight ANC headphones tuned for everyday commuting.",
     description: "A lighter daily-driver headset with strong ANC and balanced sound.",
     features: ["Active noise cancellation", "32-hour battery", "Low-latency mode"],
-    specifications: {
-      anc: "true",
-      batteryHours: "32",
-      connectivity: "Bluetooth 5.3",
-      weight: "214g",
-      microphone: "dual microphone",
-    },
+    specifications: { anc: "true", batteryHours: "32", connectivity: "Bluetooth 5.3", weight: "214g", microphone: "dual microphone" },
     tags: ["anc", "wireless", "commute"],
   },
   {
-    id: "hp-003",
-    sku: "MM-HP-003",
-    name: "Studio Air X",
-    slug: "studio-air-x",
-    category: "headphones",
-    pricePaise: 479900,
-    currency: "INR",
-    rating: 4.8,
-    reviewCount: 863,
-    inventory: 7,
+    id: "hp-003", sku: "MM-HP-003", name: "Studio Air X", slug: "studio-air-x", category: "headphones",
+    pricePaise: 479900, currency: "INR", rating: 4.8, reviewCount: 863, inventory: 7,
     shortDescription: "Studio-focused wireless headphones with adaptive ANC.",
     description: "High-fidelity wireless headphones with adaptive noise control and a studio tilt.",
     features: ["Adaptive ANC", "50-hour battery", "Hi-res wireless", "USB-C audio"],
-    specifications: {
-      anc: "true",
-      batteryHours: "50",
-      connectivity: "Bluetooth 5.4",
-      weight: "271g",
-      microphone: "triple array",
-    },
+    specifications: { anc: "true", batteryHours: "50", connectivity: "Bluetooth 5.4", weight: "271g", microphone: "triple array" },
     tags: ["anc", "wireless", "studio", "premium"],
   },
   {
-    id: "kb-001",
-    sku: "MM-KB-001",
-    name: "Keycraft TKL",
-    slug: "keycraft-tkl",
-    category: "keyboards",
-    pricePaise: 349900,
-    currency: "INR",
-    rating: 4.7,
-    reviewCount: 672,
-    inventory: 18,
+    id: "kb-001", sku: "MM-KB-001", name: "Keycraft TKL", slug: "keycraft-tkl", category: "keyboards",
+    pricePaise: 349900, currency: "INR", rating: 4.7, reviewCount: 672, inventory: 18,
     shortDescription: "Compact mechanical keyboard with hot-swap switches.",
     description: "A clean tenkeyless board with hot-swap switches and quiet stabilizers.",
     features: ["Hot-swap switches", "TKL layout", "Per-key backlight"],
@@ -117,16 +61,8 @@ export const catalog: Product[] = [
     tags: ["mechanical", "keyboard", "tkl"],
   },
   {
-    id: "ms-001",
-    sku: "MM-MS-001",
-    name: "Arc Precision Mouse",
-    slug: "arc-precision-mouse",
-    category: "mice",
-    pricePaise: 249900,
-    currency: "INR",
-    rating: 4.5,
-    reviewCount: 928,
-    inventory: 31,
+    id: "ms-001", sku: "MM-MS-001", name: "Arc Precision Mouse", slug: "arc-precision-mouse", category: "mice",
+    pricePaise: 249900, currency: "INR", rating: 4.5, reviewCount: 928, inventory: 31,
     shortDescription: "Ergonomic wireless mouse with an accurate 26K sensor.",
     description: "A balanced productivity and gaming mouse with a high-resolution optical sensor.",
     features: ["26K sensor", "Ergonomic shape", "70-hour battery"],
@@ -134,16 +70,8 @@ export const catalog: Product[] = [
     tags: ["mouse", "wireless", "ergonomic"],
   },
   {
-    id: "wm-001",
-    sku: "MM-WM-001",
-    name: "Viewline 27Q",
-    slug: "viewline-27q",
-    category: "monitors",
-    pricePaise: 2199900,
-    currency: "INR",
-    rating: 4.7,
-    reviewCount: 404,
-    inventory: 5,
+    id: "wm-001", sku: "MM-WM-001", name: "Viewline 27Q", slug: "viewline-27q", category: "monitors",
+    pricePaise: 2199900, currency: "INR", rating: 4.7, reviewCount: 404, inventory: 5,
     shortDescription: "27-inch QHD monitor with a 165Hz refresh rate.",
     description: "A sharp QHD productivity and gaming display with USB-C connectivity.",
     features: ["27-inch QHD", "165Hz", "USB-C 90W"],
@@ -151,16 +79,8 @@ export const catalog: Product[] = [
     tags: ["monitor", "qhd", "gaming", "usb-c"],
   },
   {
-    id: "wc-001",
-    sku: "MM-WC-001",
-    name: "FrameCam 4K",
-    slug: "framecam-4k",
-    category: "webcams",
-    pricePaise: 599900,
-    currency: "INR",
-    rating: 4.6,
-    reviewCount: 318,
-    inventory: 11,
+    id: "wc-001", sku: "MM-WC-001", name: "FrameCam 4K", slug: "framecam-4k", category: "webcams",
+    pricePaise: 599900, currency: "INR", rating: 4.6, reviewCount: 318, inventory: 11,
     shortDescription: "4K webcam with HDR and beamforming microphones.",
     description: "A compact camera for calls, streaming and creator setups.",
     features: ["4K HDR", "Beamforming microphones", "Auto framing"],
@@ -168,16 +88,8 @@ export const catalog: Product[] = [
     tags: ["webcam", "4k", "video"],
   },
   {
-    id: "sw-001",
-    sku: "MM-SW-001",
-    name: "Pulse One",
-    slug: "pulse-one",
-    category: "smartwatches",
-    pricePaise: 449900,
-    currency: "INR",
-    rating: 4.5,
-    reviewCount: 711,
-    inventory: 9,
+    id: "sw-001", sku: "MM-SW-001", name: "Pulse One", slug: "pulse-one", category: "smartwatches",
+    pricePaise: 449900, currency: "INR", rating: 4.5, reviewCount: 711, inventory: 9,
     shortDescription: "AMOLED smartwatch with GPS and seven-day battery life.",
     description: "A straightforward everyday smartwatch with bright AMOLED display and multi-day battery.",
     features: ["AMOLED display", "GPS", "7-day battery", "Water resistant"],
@@ -185,6 +97,8 @@ export const catalog: Product[] = [
     tags: ["watch", "fitness", "gps"],
   },
 ];
+
+const quotes = new Map<string, CheckoutQuote>();
 
 export function findProduct(productId: string): Product | undefined {
   return catalog.find((product) => product.id === productId);
@@ -197,17 +111,10 @@ export function buildQuote(product: Product, quantity: number): CheckoutQuote {
   const discountPaise = subtotalPaise >= 500000 ? 25000 : 0;
   const totalPaise = subtotalPaise + shippingPaise + taxPaise - discountPaise;
 
-  return {
+  const quote: CheckoutQuote = {
     quoteId: `quote_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
     merchantId: MERCHANT_ID,
-    lineItems: [
-      {
-        productId: product.id,
-        quantity,
-        unitPricePaise: product.pricePaise,
-        lineTotalPaise: subtotalPaise,
-      },
-    ],
+    lineItems: [{ productId: product.id, quantity, unitPricePaise: product.pricePaise, lineTotalPaise: subtotalPaise }],
     subtotalPaise,
     shippingPaise,
     taxPaise,
@@ -216,4 +123,11 @@ export function buildQuote(product: Product, quantity: number): CheckoutQuote {
     currency: "INR",
     expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
   };
+
+  quotes.set(quote.quoteId, quote);
+  return quote;
+}
+
+export function getQuote(quoteId: string): CheckoutQuote | undefined {
+  return quotes.get(quoteId);
 }
