@@ -21,12 +21,7 @@ type MerchantSnapshot = {
 const transactions = new Map<string, Transaction>();
 const audit = new Map<string, AuditEvent[]>();
 
-const terminalStates = new Set<TransactionState>([
-  "policy_blocked",
-  "payment_failed",
-  "cancelled",
-  "order_confirmed",
-]);
+const terminalStates = new Set<TransactionState>(["policy_blocked", "payment_failed", "cancelled", "order_confirmed"]);
 
 const validTransitions: Record<TransactionState, TransactionState[]> = {
   intent_proposed: ["price_verified", "policy_blocked"],
@@ -65,7 +60,7 @@ function addAudit(
 }
 
 export async function loadMerchantSnapshot(input: PurchaseIntentInput): Promise<MerchantSnapshot> {
-  const base = config.merchantAppOrigin.replace(/\/$/, "");
+  const base = config.merchantInternalUrl.replace(/\/$/, "");
   const [productResponse, inventoryResponse, quoteResponse] = await Promise.all([
     fetch(`${base}/api/agent/products/${encodeURIComponent(input.productId)}`),
     fetch(`${base}/api/agent/inventory/${encodeURIComponent(input.productId)}`),
@@ -147,21 +142,16 @@ export function evaluatePolicy(input: PurchaseIntentInput, snapshot: MerchantSna
     reason: amountPass ? "Server quote matches the current product price and quantity." : "Quote line item does not match the current product data.",
   });
 
-  return {
-    decision: checks.every((check) => check.result === "PASS") ? "ALLOW" : "BLOCK",
-    checks,
-    evaluatedAt: new Date().toISOString(),
-  };
+  return { decision: checks.every((check) => check.result === "PASS") ? "ALLOW" : "BLOCK", checks, evaluatedAt: new Date().toISOString() };
 }
 
 export async function proposeTransaction(input: PurchaseIntentInput): Promise<Transaction> {
   const id = `txn_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
   const now = new Date().toISOString();
-  const intent: PurchaseIntent = { ...input, id };
   const transaction: Transaction = {
     id,
     state: "intent_proposed",
-    intent,
+    intent: { ...input, id },
     quote: {
       quoteId: input.quoteId,
       merchantId: input.merchantId,
@@ -197,9 +187,7 @@ export async function proposeTransaction(input: PurchaseIntentInput): Promise<Tr
 
   transaction.quote = snapshot.quote;
   transitionTransaction(id, "price_verified");
-  addAudit(id, "gateway", "PRICE_VERIFIED", "The gateway re-read the merchant price, inventory and quote before policy evaluation.", {
-    totalPaise: snapshot.quote.totalPaise,
-  });
+  addAudit(id, "gateway", "PRICE_VERIFIED", "The gateway re-read the merchant price, inventory and quote before policy evaluation.", { totalPaise: snapshot.quote.totalPaise });
 
   transitionTransaction(id, "policy_pending");
   const policy = evaluatePolicy(input, snapshot);
@@ -211,9 +199,7 @@ export async function proposeTransaction(input: PurchaseIntentInput): Promise<Tr
     policy.decision === "ALLOW" ? "All mandatory transaction policies passed." : "At least one mandatory transaction policy failed.",
   );
 
-  if (policy.decision === "ALLOW") transitionTransaction(id, "policy_authorized");
-  else transitionTransaction(id, "policy_blocked");
-
+  transitionTransaction(id, policy.decision === "ALLOW" ? "policy_authorized" : "policy_blocked");
   return transactions.get(id)!;
 }
 
@@ -222,18 +208,13 @@ export function transitionTransaction(id: string, nextState: TransactionState): 
   if (!current) throw new Error("TRANSACTION_NOT_FOUND");
   if (current.state === nextState) return current;
   if (terminalStates.has(current.state)) throw new Error(`INVALID_TRANSITION:${current.state}->${nextState}`);
-
   const previousState = current.state;
-  const allowed = validTransitions[previousState];
-  if (!allowed.includes(nextState)) throw new Error(`INVALID_TRANSITION:${previousState}->${nextState}`);
+  if (!validTransitions[previousState].includes(nextState)) throw new Error(`INVALID_TRANSITION:${previousState}->${nextState}`);
 
   current.state = nextState;
   current.updatedAt = new Date().toISOString();
   transactions.set(id, current);
-  addAudit(id, "gateway", "TRANSACTION_STATE_CHANGED", `Transaction moved from ${previousState} to ${nextState}.`, {
-    fromState: previousState,
-    state: nextState,
-  });
+  addAudit(id, "gateway", "TRANSACTION_STATE_CHANGED", `Transaction moved from ${previousState} to ${nextState}.`, { fromState: previousState, state: nextState });
   return current;
 }
 
@@ -284,9 +265,7 @@ export function recordPaymentVerified(id: string): Transaction {
   if (transaction.state === "payment_verified" || transaction.state === "order_confirmed") return transaction;
   if (transaction.state !== "payment_captured") throw new Error("PAYMENT_NOT_CAPTURED");
   transitionTransaction(id, "payment_verified");
-  addAudit(id, "gateway", "PAYMENT_VERIFIED", "Razorpay payment details and checkout signature were verified server-side.", {
-    razorpayPaymentId: transaction.razorpayPaymentId ?? null,
-  });
+  addAudit(id, "gateway", "PAYMENT_VERIFIED", "Razorpay payment details and checkout signature were verified server-side.", { razorpayPaymentId: transaction.razorpayPaymentId ?? null });
   return getTransaction(id)!;
 }
 
@@ -300,18 +279,7 @@ export function confirmOrder(id: string): Transaction {
   return getTransaction(id)!;
 }
 
-export function getTransaction(id: string): Transaction | undefined {
-  return transactions.get(id);
-}
-
-export function findTransactionByRazorpayOrderId(orderId: string): Transaction | undefined {
-  return [...transactions.values()].find((transaction) => transaction.razorpayOrderId === orderId);
-}
-
-export function getTimeline(id: string): AuditEvent[] {
-  return audit.get(id) ?? [];
-}
-
-export function getAllTransactions(): Transaction[] {
-  return [...transactions.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
+export function getTransaction(id: string): Transaction | undefined { return transactions.get(id); }
+export function findTransactionByRazorpayOrderId(orderId: string): Transaction | undefined { return [...transactions.values()].find((transaction) => transaction.razorpayOrderId === orderId); }
+export function getTimeline(id: string): AuditEvent[] { return audit.get(id) ?? []; }
+export function getAllTransactions(): Transaction[] { return [...transactions.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)); }
