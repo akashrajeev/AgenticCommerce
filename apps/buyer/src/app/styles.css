@@ -7,7 +7,6 @@
   --ink: #171717;
   --muted: #70706b;
   --line: #ddddda;
-  --soft: #efefeb;
   --accent: #173d2e;
   --accent-soft: #e4eee8;
   --danger: #8d332d;
@@ -45,7 +44,10 @@ textarea:focus, input:focus { border-color: #8f8f88; box-shadow: 0 0 0 2px #e6e6
 .policy-note { border-left: 1px solid var(--line); padding: 2px 0 3px 16px; display: flex; flex-direction: column; gap: 4px; }
 .policy-note strong { font-size: 12px; }
 .policy-note span { color: var(--muted); font-size: 11px; line-height: 1.45; }
-.run-button { width: 100%; margin-top: 26px; height: 48px; border: 1px solid var(--ink); background: var(--ink); color: white; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-weight: 600; }
+.run-button, .pay-button { width: 100%; margin-top: 26px; height: 48px; border: 1px solid var(--ink); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-weight: 600; }
+.run-button { background: var(--ink); color: white; }
+.pay-button { margin-top: 10px; background: white; color: var(--ink); }
+.pay-button.pay-ready { background: var(--accent); border-color: var(--accent); color: white; }
 .run-button:disabled { opacity: .55; cursor: wait; }
 .error-box { margin-top: 14px; border: 1px solid #ddbbb7; background: var(--danger-soft); color: var(--danger); padding: 12px; font-size: 12px; line-height: 1.5; }
 .workspace-footer { margin-top: 34px; padding-top: 18px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; color: #777771; font-size: 10px; }
@@ -54,9 +56,10 @@ textarea:focus, input:focus { border-color: #8f8f88; box-shadow: 0 0 0 2px #e6e6
 .decision-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding: 8px 0 15px; }
 .decision-header > div { display: flex; align-items: center; gap: 10px; }
 .status { padding: 5px 8px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; border: 1px solid #c9c9c4; }
-.status-authorized { color: var(--accent); background: var(--accent-soft); border-color: #c3d6ca; }
+.status-authorized, .status-paid { color: var(--accent); background: var(--accent-soft); border-color: #c3d6ca; }
 .status-blocked { color: var(--danger); background: var(--danger-soft); border-color: #e0c3bf; }
 .status-working { color: #655928; background: #f2eedf; border-color: #ddd3af; }
+.status-payment { color: #17465b; background: #e8f0f3; border-color: #c7d9df; }
 .status-ready { color: #666661; background: #efefeb; }
 .decision-label, .quiet { color: var(--muted); font-size: 11px; }
 .decision-header code { color: #6c6c67; font-size: 10px; }
@@ -95,6 +98,10 @@ textarea:focus, input:focus { border-color: #8f8f88; box-shadow: 0 0 0 2px #e6e6
 .timeline-row:not(:last-child)::after { content: ""; position: absolute; left: 4px; top: 17px; width: 1px; height: 18px; background: var(--line); }
 .timeline-dot { width: 9px; height: 9px; border: 1px solid #b7b7b1; border-radius: 50%; background: var(--bg); z-index: 1; }
 .timeline-dot.done { background: var(--accent); border-color: var(--accent); }
+.refs-panel { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 18px; display: grid; gap: 10px; }
+.refs-panel div { display: grid; grid-template-columns: 120px 1fr; gap: 12px; font-size: 11px; }
+.refs-panel span { color: var(--muted); }
+.refs-panel code { overflow-wrap: anywhere; color: #4f4f4a; }
 
 @media (max-width: 900px) {
   .buyer-grid { grid-template-columns: 1fr; }
