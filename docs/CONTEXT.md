@@ -77,19 +77,20 @@ See `docs/razorpay/mcp.md` for the research and sources.
 - Quote revalidation endpoint.
 - Trusted merchant-order confirmation endpoint.
 - Merchant operations console at `/operations`.
+- Transaction detail/audit view at `/operations/transactions/:id`.
 
 ### Buyer
 
 - Modern transaction workspace UI.
 - Model-backed structured purchase planning via `/api/agent/purchase-plan`.
-- The buyer planner reads the merchant manifest/catalog over HTTP rather than importing merchant source code.
+- Buyer planner reads merchant manifest/catalog over HTTP rather than importing merchant source code.
 - Model output is constrained with JSON Schema and product IDs are validated against the live catalog.
 - Hard spending limit is supplied by the application and is not editable by the model.
 - Real Razorpay Standard Checkout launcher.
 
 ### Gateway
 
-- Deterministic policy engine.
+- Deterministic policy engine with budget, quantity, inventory, merchant, quote-validity and amount-integrity checks.
 - Server-side merchant revalidation.
 - Strict transaction state machine.
 - Transaction/audit timeline.
@@ -100,21 +101,21 @@ See `docs/razorpay/mcp.md` for the research and sources.
 - Basic idempotency protection for duplicate webhook deliveries.
 - Merchant order reconciliation after payment verification.
 
-### Infrastructure
+### Infrastructure and validation
 
 - Dockerfiles for merchant, buyer and gateway.
 - Docker Compose services for PostgreSQL, merchant, buyer and gateway.
-- CI workflow for npm install/typecheck/build.
+- CI workflow for install, typecheck, unit tests and build.
+- Unit tests for deterministic policy behavior and Razorpay signature validation.
 - Environment templates with Test Mode credentials kept out of the frontend.
 
 ## Current Limitations
 
 - Transaction, audit, webhook-deduplication and merchant-order storage are currently in-memory maps rather than PostgreSQL-backed persistence. PostgreSQL is present in Compose but not yet the source of truth.
 - The checkout quote store is currently in-memory inside the merchant app.
-- The current buyer model integration uses direct Responses API HTTP calls with `OPENAI_API_KEY`; the official OpenAI SDK is not required.
 - MCP is documented/configurable but intentionally not an unrestricted production payment path.
-- Webhook persistence/idempotency should move from process memory to PostgreSQL before production use.
 - The Docker/Test Mode path still needs a real local verification by the developer with Test credentials and a public webhook tunnel/staging URL.
+- The final recovery/failure simulator is not yet implemented as a polished demo control.
 
 ## Important Environment Variables
 
@@ -190,7 +191,7 @@ Prefer:
 
 ## Next Step
 
-1. Replace the in-memory transaction/audit/webhook/order/quote stores with persistent PostgreSQL repositories while preserving the current public APIs and state machine.
-2. Add automated unit/integration tests for policy invariants, transaction transitions, signature verification and webhook idempotency.
-3. Perform a real Razorpay Test Mode run with developer-provided Test Mode credentials and webhook configuration.
-4. Add the final Transaction Command Center and failure simulator after the persistent core is stable.
+1. Replace in-memory transaction/audit/webhook/order/quote stores with persistent PostgreSQL repositories while preserving public APIs and the state machine.
+2. Finish automated integration tests around transaction transitions and webhook reconciliation.
+3. Run a real Razorpay Test Mode transaction with developer-provided Test credentials and webhook configuration; verify the resulting IDs/events in the Dashboard.
+4. Add the final failure/recovery simulator and the judge-facing command center polish once persistence is stable.
