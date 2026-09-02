@@ -108,6 +108,7 @@ See `docs/razorpay/mcp.md` for the research and sources.
 - CI workflow for install, typecheck, unit tests and build.
 - Unit tests for deterministic policy behavior and Razorpay signature validation.
 - Environment templates with Test Mode credentials kept out of the frontend.
+- Root `.dockerignore` added so host `node_modules`, build output, secrets and local artifacts cannot overwrite the clean Docker workspace.
 
 ## Current Limitations
 
@@ -188,10 +189,12 @@ Prefer:
 - Test and Live credentials must never be mixed.
 - Authorized payments must be captured according to the merchant's capture configuration.
 - OpenAI model availability/cost can change; keep the model configurable.
+- Docker had a local-workspace contamination issue because `.dockerignore` was missing; this is now addressed at repository root.
 
 ## Next Step
 
-1. Replace in-memory transaction/audit/webhook/order/quote stores with persistent PostgreSQL repositories while preserving public APIs and the state machine.
-2. Finish automated integration tests around transaction transitions and webhook reconciliation.
-3. Run a real Razorpay Test Mode transaction with developer-provided Test credentials and webhook configuration; verify the resulting IDs/events in the Dashboard.
-4. Add the final failure/recovery simulator and the judge-facing command center polish once persistence is stable.
+1. Pull the latest `main` and run `docker compose build --no-cache` to verify the clean Docker build context fix.
+2. If Docker is green, run `docker compose up --build` and perform the first real Razorpay Test Mode Order + Standard Checkout flow.
+3. Configure a public Razorpay webhook URL and verify signature/event reconciliation end-to-end.
+4. Replace in-memory transaction/audit/webhook/order/quote stores with PostgreSQL-backed repositories before final submission.
+5. Finish the failure/recovery simulator and final judge-facing command center polish.
