@@ -5,7 +5,7 @@ export const MERCHANT_ID = "mandate-market";
 export const merchantManifest: MerchantManifest = {
   name: "Mandate Market",
   merchantId: MERCHANT_ID,
-  version: "1.0",
+  version: "1.1",
   currency: "INR",
   capabilities: {
     catalog: true,
@@ -13,6 +13,7 @@ export const merchantManifest: MerchantManifest = {
     inventory: true,
     checkoutPreview: true,
     agentCheckout: true,
+    revenueRecommendations: true,
     payment: "razorpay",
   },
   endpoints: {
@@ -20,6 +21,7 @@ export const merchantManifest: MerchantManifest = {
     product: "/api/agent/products/:id",
     inventory: "/api/agent/inventory/:id",
     checkoutPreview: "/api/agent/checkout/preview",
+    revenueRecommendations: "/api/agent/recommendations?productId=:id&maxSpendPaise=:limit",
   },
 };
 
