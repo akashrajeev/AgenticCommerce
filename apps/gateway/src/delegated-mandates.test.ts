@@ -47,7 +47,7 @@ test("allows multiple purchases while enforcing a reusable total budget", async 
     assert.equal(delegatedMandateStats(mandate.mandateId)?.spentPaise, 399900);
     const second = await executeDelegatedMandate(mandate.mandateId, checkout(quote("ms-001")));
     assert.equal(second.authorization.transaction.state, "policy_authorized");
-    assert.equal(delegatedMandateStats(mandate.mandateId)?.remainingPaise, 100200);
+    assert.equal(delegatedMandateStats(mandate.mandateId)?.remainingPaise, 200);
   });
 });
 
