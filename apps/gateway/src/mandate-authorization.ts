@@ -42,6 +42,8 @@ export type SignedMandateAuthorizationInput = Omit<MandateAuthorizationInput, "u
   userMandate: SignedUserMandate;
 };
 
+const inFlightNonceClaims = new Set<string>();
+
 function assertSafeTime(value: string, field: string): number {
   const time = new Date(value).getTime();
   if (!Number.isFinite(time)) throw new Error(`INVALID_MANDATE_${field.toUpperCase()}`);
@@ -112,90 +114,97 @@ function validateMandateShape(userMandate: UserMandate, checkout: MandateCheckou
 export async function authorizeCheckout(input: MandateAuthorizationInput): Promise<MandateAuthorizationResult> {
   validateMandateShape(input.userMandate, input.checkout, input.paymentRail);
 
-  const replayed = findTransactionByMandateNonce(input.userMandate.mandateId, input.userMandate.nonce);
-  if (replayed) throw new Error("MANDATE_NONCE_REPLAY");
+  const nonceClaim = `${input.userMandate.mandateId}:${input.userMandate.nonce}`;
+  if (inFlightNonceClaims.has(nonceClaim) || findTransactionByMandateNonce(input.userMandate.mandateId, input.userMandate.nonce)) {
+    throw new Error("MANDATE_NONCE_REPLAY");
+  }
+  inFlightNonceClaims.add(nonceClaim);
 
-  const binding = canonicalizeCheckoutBinding(input.checkout);
-  const bindingSignature = signBinding(binding);
-  const firstLine = input.checkout.lineItems[0];
-  if (!firstLine) throw new Error("INVALID_CHECKOUT_ITEMS");
+  try {
+    const binding = canonicalizeCheckoutBinding(input.checkout);
+    const bindingSignature = signBinding(binding);
+    const firstLine = input.checkout.lineItems[0];
+    if (!firstLine) throw new Error("INVALID_CHECKOUT_ITEMS");
 
-  const purchaseIntent: Omit<PurchaseIntent, "id"> = {
-    merchantId: input.checkout.merchantId,
-    productId: firstLine.productId,
-    quantity: firstLine.quantity,
-    lineItems: input.checkout.lineItems.map((line) => ({ productId: line.productId, quantity: line.quantity })),
-    maxSpendPaise: input.userMandate.maxSpend.amountPaise,
-    reason: input.userMandate.purpose,
-    quoteId: input.checkout.quoteId,
-  };
+    const purchaseIntent: Omit<PurchaseIntent, "id"> = {
+      merchantId: input.checkout.merchantId,
+      productId: firstLine.productId,
+      quantity: firstLine.quantity,
+      lineItems: input.checkout.lineItems.map((line) => ({ productId: line.productId, quantity: line.quantity })),
+      maxSpendPaise: input.userMandate.maxSpend.amountPaise,
+      reason: input.userMandate.purpose,
+      quoteId: input.checkout.quoteId,
+    };
 
-  const transaction = await proposeTransaction(purchaseIntent);
-  if (transaction.state !== "policy_authorized") throw new Error(`MANDATE_POLICY_BLOCKED:${transaction.state}`);
-  if (transaction.quote.totalPaise !== input.checkout.totalPaise) throw new Error("MANDATE_AMOUNT_REVALIDATION_FAILED");
+    const transaction = await proposeTransaction(purchaseIntent);
+    if (transaction.state !== "policy_authorized") throw new Error(`MANDATE_POLICY_BLOCKED:${transaction.state}`);
+    if (transaction.quote.totalPaise !== input.checkout.totalPaise) throw new Error("MANDATE_AMOUNT_REVALIDATION_FAILED");
 
-  const rebound = canonicalizeCheckoutBinding({ ...input.checkout, totalPaise: transaction.quote.totalPaise });
-  if (rebound !== binding) throw new Error("MANDATE_BINDING_CHANGED");
+    const rebound = canonicalizeCheckoutBinding({ ...input.checkout, totalPaise: transaction.quote.totalPaise });
+    if (rebound !== binding) throw new Error("MANDATE_BINDING_CHANGED");
 
-  const expiresAt = mandateExpiry(input.userMandate, input.checkout);
-  const createdAt = nowIso();
-  const checkoutMandate: CheckoutMandate = {
-    mandateId: input.userMandate.mandateId,
-    checkoutId: input.checkout.checkoutId,
-    merchantId: input.checkout.merchantId,
-    cartHash: input.checkout.cartHash,
-    amount: { currency: "INR", amountPaise: transaction.quote.totalPaise },
-    createdAt,
-    expiresAt,
-    nonce: input.userMandate.nonce,
-  };
+    const expiresAt = mandateExpiry(input.userMandate, input.checkout);
+    const createdAt = nowIso();
+    const checkoutMandate: CheckoutMandate = {
+      mandateId: input.userMandate.mandateId,
+      checkoutId: input.checkout.checkoutId,
+      merchantId: input.checkout.merchantId,
+      cartHash: input.checkout.cartHash,
+      amount: { currency: "INR", amountPaise: transaction.quote.totalPaise },
+      createdAt,
+      expiresAt,
+      nonce: input.userMandate.nonce,
+    };
 
-  const authorizationId = `auth_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
-  const paymentMandate: PaymentMandate = {
-    mandateId: input.userMandate.mandateId,
-    checkoutMandateId: `${input.userMandate.mandateId}:${input.checkout.checkoutId}`,
-    authorizationId,
-    merchantId: input.checkout.merchantId,
-    cartHash: input.checkout.cartHash,
-    amount: { currency: "INR", amountPaise: transaction.quote.totalPaise },
-    paymentRail: input.paymentRail,
-    createdAt,
-    expiresAt,
-    nonce: input.userMandate.nonce,
-  };
+    const authorizationId = `auth_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
+    const paymentMandate: PaymentMandate = {
+      mandateId: input.userMandate.mandateId,
+      checkoutMandateId: `${input.userMandate.mandateId}:${input.checkout.checkoutId}`,
+      authorizationId,
+      merchantId: input.checkout.merchantId,
+      cartHash: input.checkout.cartHash,
+      amount: { currency: "INR", amountPaise: transaction.quote.totalPaise },
+      paymentRail: input.paymentRail,
+      createdAt,
+      expiresAt,
+      nonce: input.userMandate.nonce,
+    };
 
-  const authorization: PaymentAuthorization = {
-    authorizationId,
-    mandateId: input.userMandate.mandateId,
-    checkoutSessionId: input.checkout.checkoutId,
-    merchantId: input.checkout.merchantId,
-    amount: { currency: "INR", amountPaise: transaction.quote.totalPaise },
-    cartHash: input.checkout.cartHash,
-    paymentRail: input.paymentRail,
-    status: "authorized",
-    createdAt,
-    expiresAt,
-  };
+    const authorization: PaymentAuthorization = {
+      authorizationId,
+      mandateId: input.userMandate.mandateId,
+      checkoutSessionId: input.checkout.checkoutId,
+      merchantId: input.checkout.merchantId,
+      amount: { currency: "INR", amountPaise: transaction.quote.totalPaise },
+      cartHash: input.checkout.cartHash,
+      paymentRail: input.paymentRail,
+      status: "authorized",
+      createdAt,
+      expiresAt,
+    };
 
-  const boundTransaction = attachMandateAuthorization(transaction.id, authorization);
-  addMandateAuthorizationAudit(boundTransaction.id, {
-    mandateId: checkoutMandate.mandateId,
-    checkoutId: checkoutMandate.checkoutId,
-    authorizationId: authorization.authorizationId,
-    paymentRail: authorization.paymentRail,
-    amountPaise: authorization.amount.amountPaise,
-    cartHash: authorization.cartHash,
-    bindingSignature,
-  });
+    const boundTransaction = attachMandateAuthorization(transaction.id, authorization);
+    addMandateAuthorizationAudit(boundTransaction.id, {
+      mandateId: checkoutMandate.mandateId,
+      checkoutId: checkoutMandate.checkoutId,
+      authorizationId: authorization.authorizationId,
+      paymentRail: authorization.paymentRail,
+      amountPaise: authorization.amount.amountPaise,
+      cartHash: authorization.cartHash,
+      bindingSignature,
+    });
 
-  return {
-    transaction: boundTransaction,
-    checkoutMandate,
-    paymentMandate,
-    authorization,
-    binding,
-    bindingSignature,
-  };
+    return {
+      transaction: boundTransaction,
+      checkoutMandate,
+      paymentMandate,
+      authorization,
+      binding,
+      bindingSignature,
+    };
+  } finally {
+    inFlightNonceClaims.delete(nonceClaim);
+  }
 }
 
 export async function authorizeSignedCheckout(input: SignedMandateAuthorizationInput): Promise<MandateAuthorizationResult> {
