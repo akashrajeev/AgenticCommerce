@@ -109,12 +109,16 @@ services:
       NODE_ENV: production
       PORT: 3000
       GATEWAY_INTERNAL_URL: http://gateway:4000
+      MCP_INTERNAL_URL: http://mcp:4100
+      MCP_AGENT_TOKEN: ${MCP_AGENT_TOKEN:-mandate-local-mcp}
       INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:-mandate-local-gateway}
       ACP_API_KEY: ${ACP_API_KEY:-mandate-local-acp}
     ports:
       - "3000:3000"
     depends_on:
       postgres:
+        condition: service_healthy
+      mcp:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
