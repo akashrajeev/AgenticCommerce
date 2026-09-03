@@ -181,6 +181,7 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
       status: "authorized",
       createdAt,
       expiresAt,
+      nonce: input.userMandate.nonce,
     };
 
     const boundTransaction = attachMandateAuthorization(transaction.id, authorization);
@@ -191,6 +192,7 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
       paymentRail: authorization.paymentRail,
       amountPaise: authorization.amount.amountPaise,
       cartHash: authorization.cartHash,
+      nonce: authorization.nonce,
       bindingSignature,
     });
 
