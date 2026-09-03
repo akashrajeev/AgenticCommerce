@@ -42,6 +42,18 @@ function sameItems(a: CheckoutLineItem[], b: CheckoutLineItem[]): boolean {
   return normalize(a).join("|") === normalize(b).join("|");
 }
 
+function sameOffer(a: MerchantOffer, b: MerchantOffer): boolean {
+  return a.offerId === b.offerId
+    && a.intentId === b.intentId
+    && a.merchantId === b.merchantId
+    && a.quoteId === b.quoteId
+    && a.amount.currency === b.amount.currency
+    && a.amount.amountPaise === b.amount.amountPaise
+    && a.sourceProtocol === b.sourceProtocol
+    && a.expiresAt === b.expiresAt
+    && sameItems(a.items, b.items);
+}
+
 async function fetchMerchantOfferAttestation(negotiationId: string, offer: MerchantOffer) {
   const response = await fetch(`${config.merchantInternalUrl}/api/agent/negotiate/${encodeURIComponent(negotiationId)}`, { cache: "no-store" });
   if (!response.ok) throw new Error("NEGOTIATION_NOT_FOUND");
@@ -74,6 +86,7 @@ export async function acceptNegotiatedOffer(input: { negotiationId: string; mand
   const key = `${input.negotiationId}:${input.mandateId}:${input.offer.offerId}`;
   const existing = accepted.get(key);
   if (existing) {
+    if (!sameOffer(existing.offer, input.offer)) throw new Error("NEGOTIATION_IDEMPOTENCY_CONFLICT");
     const transaction = getTransaction(existing.transactionId);
     if (!transaction?.mandateAuthorization) throw new Error("NEGOTIATION_TRANSACTION_NOT_FOUND");
     return {
