@@ -34,3 +34,4 @@ export type AuditEvent = { id: string; transactionId: string; actor: AuditActor;
 export type Transaction = { id: string; state: TransactionState; intent: PurchaseIntent; quote: CheckoutQuote; policy?: PolicyDecision; razorpayOrderId?: string; razorpayPaymentId?: string; createdAt: string; updatedAt: string };
 
 export * from "./protocol.js";
+export * from "./protocol-adapter.js";
