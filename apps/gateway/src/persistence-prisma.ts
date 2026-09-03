@@ -1,4 +1,4 @@
-import type { AuditEvent, MerchantOffer, Transaction } from "@mandate/types";
+import type { AuditEvent, MerchantOffer, MerchantOfferAttestation, Transaction } from "@mandate/types";
 import { getPrisma } from "./prisma.js";
 import {
   claimWebhookEvent as claimWebhookEventSql,
@@ -10,6 +10,17 @@ import {
 function jsonValue<T>(value: T) {
   return JSON.parse(JSON.stringify(value));
 }
+
+export type PersistedNegotiationSession = {
+  negotiationId: string;
+  intent: Record<string, unknown>;
+  merchant: { agentId: string; agentType: "merchant"; name: string; issuer: string };
+  offers: MerchantOffer[];
+  offerAttestations?: MerchantOfferAttestation[];
+  turns: Array<Record<string, unknown>>;
+  createdAt: string;
+  expiresAt: string;
+};
 
 export type PersistedNegotiationAcceptance = {
   key: string;
@@ -34,6 +45,21 @@ async function ensureNegotiationAcceptanceTable(prisma: Awaited<ReturnType<typeo
     authorization_id TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
   )`);
+}
+
+async function ensureNegotiationSessionTable(prisma: Awaited<ReturnType<typeof getPrisma>>): Promise<void> {
+  if (!prisma) return;
+  await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS negotiation_sessions (
+    negotiation_id TEXT PRIMARY KEY,
+    intent JSONB NOT NULL,
+    merchant JSONB NOT NULL,
+    offers JSONB NOT NULL,
+    offer_attestations JSONB,
+    turns JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+  )`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS negotiation_sessions_expires_at_idx ON negotiation_sessions(expires_at)`);
 }
 
 export async function saveTransaction(transaction: Transaction): Promise<void> {
@@ -111,6 +137,58 @@ export async function releaseWebhookEvent(dedupeKey: string): Promise<void> {
   const prisma = await getPrisma();
   if (!prisma) return releaseWebhookEventSql(dedupeKey);
   await prisma.webhookEvent.deleteMany({ where: { dedupeKey } });
+}
+
+export async function saveNegotiationSession(input: PersistedNegotiationSession): Promise<void> {
+  const prisma = await getPrisma();
+  if (!prisma) return;
+  await ensureNegotiationSessionTable(prisma);
+  await prisma.negotiationSession.upsert({
+    where: { negotiationId: input.negotiationId },
+    create: {
+      negotiationId: input.negotiationId,
+      intent: jsonValue(input.intent),
+      merchant: jsonValue(input.merchant),
+      offers: jsonValue(input.offers),
+      offerAttestations: input.offerAttestations === undefined ? undefined : jsonValue(input.offerAttestations),
+      turns: jsonValue(input.turns),
+      createdAt: new Date(input.createdAt),
+      expiresAt: new Date(input.expiresAt),
+    },
+    update: {
+      intent: jsonValue(input.intent),
+      merchant: jsonValue(input.merchant),
+      offers: jsonValue(input.offers),
+      offerAttestations: input.offerAttestations === undefined ? undefined : jsonValue(input.offerAttestations),
+      turns: jsonValue(input.turns),
+      expiresAt: new Date(input.expiresAt),
+    },
+  });
+}
+
+export async function loadNegotiationSession(negotiationId: string): Promise<PersistedNegotiationSession | undefined> {
+  const prisma = await getPrisma();
+  if (!prisma) return undefined;
+  await ensureNegotiationSessionTable(prisma);
+  const row = await prisma.negotiationSession.findUnique({ where: { negotiationId } });
+  if (!row || row.expiresAt.getTime() <= Date.now()) return undefined;
+  return {
+    negotiationId: row.negotiationId,
+    intent: row.intent as Record<string, unknown>,
+    merchant: row.merchant as PersistedNegotiationSession["merchant"],
+    offers: row.offers as unknown as MerchantOffer[],
+    offerAttestations: row.offerAttestations === null ? undefined : row.offerAttestations as unknown as MerchantOfferAttestation[],
+    turns: row.turns as Array<Record<string, unknown>>,
+    createdAt: row.createdAt.toISOString(),
+    expiresAt: row.expiresAt.toISOString(),
+  };
+}
+
+export async function deleteNegotiationSession(negotiationId: string): Promise<void> {
+  const prisma = await getPrisma();
+  if (!prisma) return;
+  await ensureNegotiationSessionTable(prisma);
+  await prisma.negotiationSession.deleteMany({ where: { negotiationId } });
 }
 
 export async function saveNegotiationAcceptance(input: PersistedNegotiationAcceptance): Promise<void> {
