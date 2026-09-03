@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import type { CheckoutBindingInput, CheckoutQuote, Product, UserMandate } from "@mandate/types";
+import type { CheckoutQuote, Product, UserMandate } from "@mandate/types";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
-import { authorizeCheckout } from "./mandate-authorization.js";
+import { authorizeCheckout, type MandateCheckoutBindingInput } from "./mandate-authorization.js";
 
 function product(id = "hp-001"): Product {
   return { id, sku: id, name: id === "hp-001" ? "SoundMax Pro" : "Arc Precision Mouse", slug: id, category: id === "hp-001" ? "headphones" : "mice", pricePaise: id === "hp-001" ? 399900 : 249900, currency: "INR", rating: 4.6, reviewCount: 10, inventory: 20, shortDescription: "test", description: "test", features: [], specifications: {}, tags: ["test"] };
@@ -14,7 +14,7 @@ function quote(lineItems = [{ productId: "hp-001", quantity: 1, unitPricePaise: 
   return { quoteId: "quote_mandate", merchantId: "mandate-market", lineItems, subtotalPaise, shippingPaise: 0, taxPaise: 0, discountPaise: 0, totalPaise: subtotalPaise, currency: "INR", expiresAt: new Date(Date.now() + 60_000).toISOString() };
 }
 
-function binding(): CheckoutBindingInput {
+function binding(): MandateCheckoutBindingInput {
   const q = quote();
   const checkout = { checkoutId: "cs_mandate_test", merchantId: q.merchantId, quoteId: q.quoteId, currency: "INR" as const, totalPaise: q.totalPaise, lineItems: q.lineItems, expiresAt: q.expiresAt };
   return { ...checkout, cartHash: createHash("sha256").update(canonicalizeCheckoutBinding(checkout)).digest("hex") };
@@ -54,7 +54,6 @@ test("authorizes a fresh checkout only when the mandate and binding match", asyn
 });
 
 test("rejects a checkout whose cart hash has been tampered", async () => {
-  const q = quote();
   await assert.rejects(
     () => authorizeCheckout({ userMandate: mandate(), checkout: { ...binding(), cartHash: "tampered" }, paymentRail: "razorpay_standard_checkout" }),
     /CHECKOUT_CART_HASH_MISMATCH/,
@@ -64,7 +63,7 @@ test("rejects a checkout whose cart hash has been tampered", async () => {
 test("rejects spending beyond the user mandate", async () => {
   const q = quote([{ productId: "hp-001", quantity: 1, unitPricePaise: 399900, lineTotalPaise: 399900 }, { productId: "ms-001", quantity: 1, unitPricePaise: 249900, lineTotalPaise: 249900 }]);
   const checkoutBase = { checkoutId: "cs_mandate_limit", merchantId: q.merchantId, quoteId: q.quoteId, currency: "INR" as const, totalPaise: q.totalPaise, lineItems: q.lineItems, expiresAt: q.expiresAt };
-  const checkout = { ...checkoutBase, cartHash: createHash("sha256").update(canonicalizeCheckoutBinding(checkoutBase)).digest("hex") };
+  const checkout = { ...checkoutBase, cartHash: createHash("sha256").update(canonicalizeCheckoutBinding(checkoutBase)).digest("hex") } satisfies MandateCheckoutBindingInput;
   await assert.rejects(
     () => authorizeCheckout({ userMandate: mandate({ maxSpend: { currency: "INR", amountPaise: 500000 } }), checkout, paymentRail: "razorpay_standard_checkout" }),
     /MANDATE_SPEND_LIMIT_EXCEEDED/,
@@ -72,7 +71,6 @@ test("rejects spending beyond the user mandate", async () => {
 });
 
 test("rejects products outside an allow-list", async () => {
-  const q = quote();
   await assert.rejects(
     () => authorizeCheckout({ userMandate: mandate({ allowedProductIds: ["ms-001"] }), checkout: binding(), paymentRail: "razorpay_standard_checkout" }),
     /MANDATE_PRODUCT_NOT_ALLOWED/,
@@ -80,9 +78,9 @@ test("rejects products outside an allow-list", async () => {
 });
 
 test("re-runs the normal gateway policy before issuing payment authorization", async () => {
-  const q = quote({ productId: "hp-001", quantity: 1, unitPricePaise: 400000, lineTotalPaise: 400000 } as never);
+  const q = quote([{ productId: "hp-001", quantity: 1, unitPricePaise: 400000, lineTotalPaise: 400000 }]);
   const checkoutBase = { checkoutId: "cs_mandate_revalidate", merchantId: q.merchantId, quoteId: q.quoteId, currency: "INR" as const, totalPaise: q.totalPaise, lineItems: q.lineItems, expiresAt: q.expiresAt };
-  const checkout = { ...checkoutBase, cartHash: createHash("sha256").update(canonicalizeCheckoutBinding(checkoutBase)).digest("hex") };
+  const checkout = { ...checkoutBase, cartHash: createHash("sha256").update(canonicalizeCheckoutBinding(checkoutBase)).digest("hex") } satisfies MandateCheckoutBindingInput;
   await withMerchantFetch(q, async () => {
     await assert.rejects(
       () => authorizeCheckout({ userMandate: mandate(), checkout, paymentRail: "razorpay_standard_checkout" }),
