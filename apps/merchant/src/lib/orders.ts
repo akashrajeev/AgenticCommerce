@@ -21,27 +21,21 @@ const orders = new Map<string, MerchantOrder>();
 export function createMerchantOrder(input: Omit<MerchantOrder, "id" | "createdAt" | "status" | "baseAmountPaise" | "incrementalRevenuePaise">): MerchantOrder {
   const existing = [...orders.values()].find((order) => order.transactionId === input.transactionId);
   if (existing) return existing;
-
   const lineItems = input.lineItems ?? [{ productId: input.productId, quantity: input.quantity, unitPricePaise: input.amountPaise, lineTotalPaise: input.amountPaise }];
   const baseAmountPaise = lineItems[0]?.lineTotalPaise ?? input.amountPaise;
   const merchandiseTotalPaise = lineItems.reduce((sum, line) => sum + line.lineTotalPaise, 0);
   const incrementalRevenuePaise = Math.max(merchandiseTotalPaise - baseAmountPaise, 0);
-
-  const order: MerchantOrder = {
-    ...input,
-    lineItems,
-    baseAmountPaise,
-    incrementalRevenuePaise,
-    id: `MM-${new Date().getFullYear()}-${crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`,
-    status: "confirmed",
-    createdAt: new Date().toISOString(),
-  };
+  const order: MerchantOrder = { ...input, lineItems, baseAmountPaise, incrementalRevenuePaise, id: `MM-${new Date().getFullYear()}-${crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`, status: "confirmed", createdAt: new Date().toISOString() };
   orders.set(order.id, order);
   return order;
 }
 
 export function listMerchantOrders(): MerchantOrder[] {
   return [...orders.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function getMerchantOrderByTransaction(transactionId: string): MerchantOrder | undefined {
+  return [...orders.values()].find((order) => order.transactionId === transactionId);
 }
 
 export function getRealizedRevenueAttribution(): { confirmedOrders: number; realizedIncrementalRevenuePaise: number; upliftedOrders: number } {
