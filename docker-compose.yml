@@ -82,7 +82,7 @@ services:
     environment:
       NODE_ENV: production
       X402_PORT: 4021
-      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-}
+      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
       X402_PAY_TO: ${X402_PAY_TO:-}
       X402_SERVICE_ID: ${X402_SERVICE_ID:-mandate-premium-data}
       X402_SERVICE_NAME: ${X402_SERVICE_NAME:-MANDATE Agent Service}
@@ -90,6 +90,7 @@ services:
       X402_NETWORK: ${X402_NETWORK:-eip155:84532}
       X402_ASSET: ${X402_ASSET:-0x036CbD53842c5426634e7929541eC2318f3dCF7e}
       X402_MAX_TIMEOUT_SECONDS: ${X402_MAX_TIMEOUT_SECONDS:-60}
+      X402_DEMO_MODE: ${X402_DEMO_MODE:-true}
     ports:
       - "4021:4021"
     healthcheck:
