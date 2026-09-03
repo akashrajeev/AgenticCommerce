@@ -51,7 +51,7 @@ function stableValue(value: unknown): unknown {
   return value;
 }
 
-function canonicalUnsignedMandate(mandate: X402ServiceMandate): string {
+export function canonicalizeX402ServiceMandate(mandate: X402ServiceMandate): string {
   const { signatureBase64: _signature, ...unsigned } = mandate;
   return JSON.stringify(stableValue(unsigned));
 }
@@ -102,7 +102,7 @@ export function validateX402ServiceMandate(mandate: X402ServiceMandate, expected
   let signature: Buffer;
   try { signature = Buffer.from(mandate.signatureBase64, "base64"); } catch { throw new Error("X402_MANDATE_SIGNATURE_INVALID"); }
   if (signature.length !== 64) throw new Error("X402_MANDATE_SIGNATURE_INVALID");
-  if (!verify(null, Buffer.from(canonicalUnsignedMandate(mandate), "utf8"), publicKey, signature)) throw new Error("X402_MANDATE_SIGNATURE_INVALID");
+  if (!verify(null, Buffer.from(canonicalizeX402ServiceMandate(mandate), "utf8"), publicKey, signature)) throw new Error("X402_MANDATE_SIGNATURE_INVALID");
   if (consumedMandates.has(replayKey(mandate, expected))) throw new Error("X402_MANDATE_REPLAY");
 }
 
