@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   patch:
-    if: contains(github.event.head_commit.message, 'stage tenant auth route migration')
+    if: hashFiles('.phase8-auth-trigger') != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,13 +83,11 @@ jobs:
           s = s.replace(old_settle, new_settle, 1)
 
           server.write_text(s)
-          marker = Path('.phase8-auth-trigger')
-          marker.unlink(missing_ok=True)
-          workflow = Path('.github/workflows/phase8-auth-patch.yml')
-          workflow.unlink(missing_ok=True)
+          Path('.phase8-auth-trigger').unlink(missing_ok=True)
+          Path('.github/workflows/phase8-auth-patch.yml').unlink(missing_ok=True)
           PY
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+akashrajeev@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apps/gateway/src/server.ts apps/gateway/src/delegated-mandates.ts .phase8-auth-trigger .github/workflows/phase8-auth-patch.yml
           git commit -m "feat: enforce tenant ownership on mandate management"
           git push origin HEAD:main
