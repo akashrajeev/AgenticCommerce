@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { catalog } from "../../lib/catalog";
+import { getRevenueRecommendations } from "../../lib/revenue";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +25,16 @@ export default async function OperationsPage() {
   const razorpayOrders = transactions.filter((txn) => Boolean(txn.razorpayOrderId)).length;
   const confirmed = transactions.filter((txn) => txn.state === "order_confirmed").length;
 
+  const opportunityMap = new Map<string, ReturnType<typeof getRevenueRecommendations>[number]>();
+  for (const product of catalog) {
+    for (const recommendation of getRevenueRecommendations(product.id)) {
+      const existing = opportunityMap.get(recommendation.productId);
+      if (!existing || recommendation.score > existing.score) opportunityMap.set(recommendation.productId, recommendation);
+    }
+  }
+  const opportunities = [...opportunityMap.values()].sort((a, b) => b.score - a.score).slice(0, 4);
+  const potentialLift = opportunities.reduce((sum, item) => sum + item.incrementalRevenuePaise, 0);
+
   return (
     <main className="ops-page">
       <header className="ops-header">
@@ -41,6 +53,25 @@ export default async function OperationsPage() {
           <div><span>Policy blocks</span><strong>{blocks}</strong><small>Stopped before Razorpay</small></div>
           <div><span>Razorpay orders</span><strong>{razorpayOrders}</strong><small>Test Mode orders created</small></div>
           <div><span>Merchant confirmations</span><strong>{confirmed}</strong><small>Verified payment path</small></div>
+        </section>
+
+        <section className="revenue-opportunities">
+          <div className="revenue-heading">
+            <div><p className="eyebrow">Revenue engine</p><h2>Agent-assisted opportunities</h2><p>Deterministic recommendations use catalog fit, customer proof, inventory and budget constraints. They can suggest a larger basket, but never authorize payment.</p></div>
+            <div className="opportunity-total"><span>Illustrative basket lift</span><strong>{formatINR(potentialLift)}</strong><small>Top {opportunities.length} eligible recommendations</small></div>
+          </div>
+          <div className="opportunity-grid">
+            {opportunities.map((item) => {
+              const source = catalog.find((product) => product.id === item.sourceProductId);
+              const target = catalog.find((product) => product.id === item.productId);
+              return <div className="opportunity-card" key={`${item.sourceProductId}-${item.productId}`}>
+                <div className="opportunity-top"><span className={`recommendation-type ${item.type.toLowerCase()}`}>{item.type}</span><span>{item.score.toFixed(1)} score</span></div>
+                <div className="opportunity-products"><strong>{source?.name ?? item.sourceProductId}</strong><span>→</span><strong>{target?.name ?? item.productId}</strong></div>
+                <p>{item.rationale}</p>
+                <div className="opportunity-foot"><span>In stock: {target?.inventory ?? 0}</span><strong>+{formatINR(item.incrementalRevenuePaise)}</strong></div>
+              </div>;
+            })}
+          </div>
         </section>
 
         <section className="transaction-table">
