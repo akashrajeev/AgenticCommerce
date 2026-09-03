@@ -31,9 +31,8 @@ function resourceUrl(request: IncomingMessage): string {
 }
 
 function writeJson(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
-  const payload = JSON.stringify(body);
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers });
-  response.end(payload);
+  response.end(JSON.stringify(body));
 }
 
 async function facilitatorStatus(): Promise<FacilitatorStatus> {
@@ -47,21 +46,7 @@ async function facilitatorStatus(): Promise<FacilitatorStatus> {
 
 function demoMandate(subjectId: string): X402ServiceMandate {
   const now = Date.now();
-  const mandate: X402ServiceMandate = {
-    version: 1,
-    mandateId: `demo-x402-${randomUUID()}`,
-    subjectId,
-    agentId: "judge-browser-agent",
-    serviceId,
-    network,
-    asset,
-    payTo,
-    maxAmountAtomic: priceAtomic,
-    nonce: `0x${Buffer.from(randomUUID().replaceAll("-", ""), "hex").toString("hex").padEnd(64, "0").slice(0, 64)}`,
-    expiresAt: new Date(now + 10 * 60_000).toISOString(),
-    publicKeyPem: demoPublicKeyPem,
-    signatureBase64: "",
-  };
+  const mandate: X402ServiceMandate = { version: 1, mandateId: `demo-x402-${randomUUID()}`, subjectId, agentId: "judge-browser-agent", serviceId, network, asset, payTo, maxAmountAtomic: priceAtomic, nonce: `0x${Buffer.from(randomUUID().replaceAll("-", ""), "hex").toString("hex").padEnd(64, "0").slice(0, 64)}`, expiresAt: new Date(now + 10 * 60_000).toISOString(), publicKeyPem: demoPublicKeyPem, signatureBase64: "" };
   mandate.signatureBase64 = sign(null, Buffer.from(canonicalizeX402ServiceMandate(mandate), "utf8"), demoKeyPair.privateKey).toString("base64");
   return mandate;
 }
@@ -72,23 +57,32 @@ async function handleResource(request: IncomingMessage, response: ServerResponse
   const required = buildPaymentRequired(resourceUrl(request), serviceName, priceAtomic, network, asset, payTo, maxTimeoutSeconds);
   const paymentHeader = typeof request.headers["payment-signature"] === "string" ? request.headers["payment-signature"] : "";
   if (!paymentHeader) { const challenge = { ...required, error: "PAYMENT-SIGNATURE header is required" }; return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) }); }
+
   let paymentPayload: X402PaymentPayload;
   try { paymentPayload = decodeBase64Json<X402PaymentPayload>(paymentHeader); } catch (error) { const challenge = { ...required, error: error instanceof Error ? error.message : "INVALID_PAYMENT_SIGNATURE" }; return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) }); }
   if (paymentPayload.x402Version !== 2 || !paymentRequirementMatches(paymentPayload.accepted, expected)) { const challenge = { ...required, error: "PAYMENT_REQUIREMENT_MISMATCH" }; return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) }); }
+
   const mandateHeader = typeof request.headers["x-mandate-service-mandate"] === "string" ? request.headers["x-mandate-service-mandate"] : "";
   if (!mandateHeader) return writeJson(response, 403, { error: "MANDATE_SERVICE_AUTHORIZATION_REQUIRED", detail: "x402 payment authorization is necessary but not sufficient; a signed MANDATE service authorization is required." });
   let mandate: X402ServiceMandate;
   try { mandate = decodeBase64Json<X402ServiceMandate>(mandateHeader); validateX402ServiceMandate(mandate, expected, serviceId); } catch (error) { return writeJson(response, 403, { error: error instanceof Error ? error.message : "X402_MANDATE_INVALID" }); }
+
+  const authorization = paymentPayload.payload.authorization;
+  const payer = authorization && typeof authorization === "object" && typeof (authorization as Record<string, unknown>).from === "string" ? String((authorization as Record<string, unknown>).from) : "";
+  if (!payer) return writeJson(response, 403, { error: "X402_PAYER_REQUIRED" });
+  if (mandate.subjectId.toLowerCase() !== payer.toLowerCase()) return writeJson(response, 403, { error: "X402_MANDATE_SUBJECT_MISMATCH", detail: "The signed MANDATE service authorization must name the same payer address as the EIP-3009 payment." });
+
   if (!facilitatorUrl) return writeJson(response, 503, { error: "X402_FACILITATOR_NOT_CONFIGURED", detail: "Set X402_FACILITATOR_URL to a facilitator that supports the selected scheme/network." });
   try {
     const verification = await facilitatorVerify(facilitatorUrl, paymentPayload, expected);
     if (!verification.isValid) { const challenge = { ...required, error: verification.invalidReason ?? "PAYMENT_INVALID" }; return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) }); }
+    if (verification.payer && verification.payer.toLowerCase() !== payer.toLowerCase()) return writeJson(response, 403, { error: "X402_FACILITATOR_PAYER_MISMATCH" });
     const settlement = await facilitatorSettle(facilitatorUrl, paymentPayload, expected);
     const settlementHeader = encodeBase64Json(settlement satisfies X402SettlementResponse);
     if (!settlement.success) return writeJson(response, 402, { error: "PAYMENT_SETTLEMENT_FAILED", settlement }, { "PAYMENT-RESPONSE": settlementHeader, "PAYMENT-REQUIRED": encodeBase64Json({ ...required, error: settlement.errorReason ?? "Settlement failed" }) });
     consumeX402ServiceMandate(mandate, expected);
-    lastSettlementProof = { at: new Date().toISOString(), facilitator: facilitatorUrl, payer: verification.payer ?? settlement.payer ?? null, transaction: settlement.transaction, network: settlement.network, amount: settlement.amount ?? expected.amount, serviceId };
-    return writeJson(response, 200, { service: serviceId, message: "Paid agent resource delivered by MANDATE-controlled x402 adapter.", payer: verification.payer ?? settlement.payer ?? null, transaction: settlement.transaction, network: settlement.network, amount: settlement.amount ?? expected.amount }, { "PAYMENT-RESPONSE": settlementHeader });
+    lastSettlementProof = { at: new Date().toISOString(), facilitator: facilitatorUrl, payer: verification.payer ?? settlement.payer ?? payer, transaction: settlement.transaction, network: settlement.network, amount: settlement.amount ?? expected.amount, serviceId };
+    return writeJson(response, 200, { service: serviceId, message: "Paid agent resource delivered by MANDATE-controlled x402 adapter.", payer: verification.payer ?? settlement.payer ?? payer, transaction: settlement.transaction, network: settlement.network, amount: settlement.amount ?? expected.amount }, { "PAYMENT-RESPONSE": settlementHeader });
   } catch (error) { return writeJson(response, 502, { error: error instanceof Error ? error.message : "X402_PAYMENT_PROCESSING_FAILED" }); }
 }
 
