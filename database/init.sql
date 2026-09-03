@@ -32,6 +32,20 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   received_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS negotiation_sessions (
+  negotiation_id TEXT PRIMARY KEY,
+  intent JSONB NOT NULL,
+  merchant JSONB NOT NULL,
+  offers JSONB NOT NULL,
+  offer_attestations JSONB,
+  turns JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS negotiation_sessions_expires_at_idx
+  ON negotiation_sessions(expires_at);
+
 CREATE TABLE IF NOT EXISTS negotiation_acceptances (
   key TEXT PRIMARY KEY,
   negotiation_id TEXT NOT NULL,
