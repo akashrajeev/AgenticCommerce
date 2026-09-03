@@ -48,3 +48,17 @@ model WebhookEvent {
 
   @@map("webhook_events")
 }
+
+model NegotiationAcceptance {
+  key             String   @id
+  negotiationId   String   @map("negotiation_id")
+  mandateId       String   @map("mandate_id")
+  offer           Json
+  transactionId   String   @unique @map("transaction_id")
+  executionId     String   @map("execution_id")
+  authorizationId String   @map("authorization_id")
+  createdAt       DateTime @map("created_at")
+
+  @@index([negotiationId, mandateId])
+  @@map("negotiation_acceptances")
+}
