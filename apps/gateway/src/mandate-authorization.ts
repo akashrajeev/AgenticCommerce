@@ -12,9 +12,13 @@ import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { config } from "./config.js";
 import { proposeTransaction } from "./transaction-core.js";
 
+export type MandateCheckoutBindingInput = CheckoutBindingInput & {
+  cartHash: string;
+};
+
 export type MandateAuthorizationInput = {
   userMandate: UserMandate;
-  checkout: CheckoutBindingInput;
+  checkout: MandateCheckoutBindingInput;
   paymentRail: string;
 };
 
@@ -49,7 +53,7 @@ function signBinding(binding: string): string {
   return createHmac("sha256", config.internalGatewaySecret).update(binding).digest("hex");
 }
 
-function validateMandateShape(userMandate: UserMandate, checkout: CheckoutBindingInput, paymentRail: string): void {
+function validateMandateShape(userMandate: UserMandate, checkout: MandateCheckoutBindingInput, paymentRail: string): void {
   const now = Date.now();
   const issuedAt = assertSafeTime(userMandate.issuedAt, "issued_at");
   const mandateExpiresAt = assertSafeTime(userMandate.expiresAt, "expiry");
@@ -59,9 +63,7 @@ function validateMandateShape(userMandate: UserMandate, checkout: CheckoutBindin
   if (issuedAt > now + 5_000) throw new Error("MANDATE_NOT_YET_VALID");
   if (mandateExpiresAt <= now) throw new Error("MANDATE_EXPIRED");
   if (checkoutExpiresAt <= now) throw new Error("CHECKOUT_BINDING_EXPIRED");
-  if (checkout.amountPaise < 0 || !Number.isSafeInteger(checkout.amountPaise)) throw new Error("INVALID_CHECKOUT_AMOUNT");
   if (checkout.totalPaise < 0 || !Number.isSafeInteger(checkout.totalPaise)) throw new Error("INVALID_CHECKOUT_AMOUNT");
-  if (checkout.amountPaise !== checkout.totalPaise) throw new Error("CHECKOUT_AMOUNT_MISMATCH");
   if (userMandate.maxSpend.currency !== checkout.currency) throw new Error("MANDATE_CURRENCY_MISMATCH");
   if (userMandate.maxSpend.amountPaise < checkout.totalPaise) throw new Error("MANDATE_SPEND_LIMIT_EXCEEDED");
   if (userMandate.merchantId && userMandate.merchantId !== checkout.merchantId) throw new Error("MANDATE_MERCHANT_MISMATCH");
