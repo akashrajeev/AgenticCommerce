@@ -95,6 +95,38 @@ export type UserMandate = {
   expiresAt: string;
 };
 
+export type DelegatedMandateStatus = "active" | "revoked" | "expired" | "exhausted";
+
+export type DelegatedMandate = {
+  mandateId: string;
+  subjectId: string;
+  agentId: string;
+  purpose: string;
+  merchantIds: string[];
+  allowedProductIds?: string[];
+  maxSpendPerPurchase: MoneyAmount;
+  totalBudget: MoneyAmount;
+  spentPaise: number;
+  reservedPaise: number;
+  executionCount: number;
+  blockedCount: number;
+  approvalMode: "delegated_autonomous";
+  constraints: Record<string, string | number | boolean | null>;
+  nonce: string;
+  issuedAt: string;
+  expiresAt: string;
+  status: DelegatedMandateStatus;
+};
+
+export type DelegatedMandateExecution = {
+  executionId: string;
+  mandateId: string;
+  transactionId: string;
+  amount: MoneyAmount;
+  status: "reserved" | "confirmed" | "released";
+  createdAt: string;
+};
+
 export type MandateCredential = {
   algorithm: "Ed25519";
   keyId?: string;
