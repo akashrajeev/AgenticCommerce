@@ -1,4 +1,4 @@
-import { catalog, findProduct, MERCHANT_ID } from "./catalog.js";
+import { catalog, findProduct, MERCHANT_ID } from "./catalog";
 
 export type RevenueRecommendation = {
   merchantId: string;
