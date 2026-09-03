@@ -182,11 +182,28 @@ export function markCheckoutStarted(id: string): Transaction {
 export function recordPayment(id: string, paymentId: string, status: "authorized" | "captured" | "failed"): Transaction {
   const transaction = getTransaction(id);
   if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+
+  // Razorpay events are not guaranteed to arrive in the same order as the browser
+  // callback. Never let a late failure event regress an already successful payment.
+  const currentState = transaction.state;
+  const nonRegressibleStates = new Set<TransactionState>(["payment_captured", "payment_verified", "order_confirmed"]);
+  if (status === "failed" && nonRegressibleStates.has(currentState)) {
+    addAudit(id, "razorpay", "PAYMENT_FAILED_IGNORED", "A late Razorpay failure event was received after a successful payment state; transaction state was preserved.", {
+      razorpayPaymentId: paymentId,
+      preservedState: currentState,
+    });
+    return transaction;
+  }
+  if (status === "failed" && currentState === "payment_failed") {
+    addAudit(id, "razorpay", "PAYMENT_FAILED_DUPLICATE", "Razorpay repeated a failed payment event; transaction state was unchanged.", { razorpayPaymentId: paymentId });
+    return transaction;
+  }
+
   transaction.razorpayPaymentId = paymentId;
   transactions.set(id, transaction);
 
   if (status === "failed") {
-    if (transaction.state !== "payment_failed") transitionTransaction(id, "payment_failed");
+    transitionTransaction(id, "payment_failed");
     addAudit(id, "razorpay", "PAYMENT_FAILED", "Razorpay reported a failed payment.", { razorpayPaymentId: paymentId });
     return getTransaction(id)!;
   }
