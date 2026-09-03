@@ -43,10 +43,24 @@ export default async function TransactionDetailPage({ params }: { params: Promis
   const quote = transaction.quote as { totalPaise?: number; currency?: string; lineItems?: Array<{ productId: string; quantity: number; unitPricePaise?: number; lineTotalPaise?: number }> };
   const policy = transaction.policy as { decision?: string; checks?: Array<Record<string, unknown>> } | undefined;
   const basketLines = quote.lineItems?.length ? quote.lineItems : intent.lineItems?.length ? intent.lineItems : intent.productId ? [{ productId: intent.productId, quantity: intent.quantity ?? 1 }] : [];
-  const webhookEvents = events.filter((event) => String(event.action).startsWith("WEBHOOK_"));
   const captured = transaction.state === "payment_captured" || transaction.state === "payment_verified" || transaction.state === "order_confirmed";
+  const webhookEvents = events.filter((event) => String(event.action).startsWith("WEBHOOK_"));
+  const webhookReceived = webhookEvents.some((event) => String(event.action) === "WEBHOOK_RECEIVED");
+  const webhookReconciled = webhookEvents.some((event) => String(event.action) === "WEBHOOK_RECONCILIATED");
+  const checkoutStarted = events.some((event) => String(event.action) === "CHECKOUT_STARTED");
+  const paymentCaptured = events.some((event) => String(event.action) === "PAYMENT_CAPTURED") || captured;
+  const paymentVerified = events.some((event) => String(event.action) === "PAYMENT_VERIFIED") || transaction.state === "order_confirmed";
+  const orderConfirmed = events.some((event) => String(event.action) === "ORDER_CONFIRMED") || transaction.state === "order_confirmed";
   const merchantOrder = transaction.state === "order_confirmed" ? getMerchantOrderByTransaction(id) : undefined;
   const basketLift = merchantOrder?.incrementalRevenuePaise ?? 0;
+  const lifecycle = [
+    { label: "Checkout", detail: checkoutStarted ? "Started" : "Waiting", done: checkoutStarted },
+    { label: "Captured", detail: paymentCaptured ? "Razorpay payment captured" : "Waiting for payment", done: paymentCaptured },
+    { label: "Webhook", detail: webhookReceived ? "Received" : "Waiting for event", done: webhookReceived },
+    { label: "Reconciled", detail: webhookReconciled ? "Gateway reconciled" : "Pending webhook reconciliation", done: webhookReconciled },
+    { label: "Verified", detail: paymentVerified ? "Server-side verification complete" : "Awaiting verification", done: paymentVerified },
+    { label: "Order", detail: orderConfirmed ? "Merchant order confirmed" : "Not confirmed", done: orderConfirmed },
+  ]; 
 
   return (
     <main className="ops-page">
@@ -80,7 +94,7 @@ export default async function TransactionDetailPage({ params }: { params: Promis
               <div><dt>Order</dt><dd>{String(transaction.razorpayOrderId ?? "Not created")}</dd></div>
               <div><dt>Payment</dt><dd>{String(transaction.razorpayPaymentId ?? "Not received")}</dd></div>
               <div><dt>Captured</dt><dd>{captured ? "Yes" : "No"}</dd></div>
-              <div><dt>Webhook evidence</dt><dd>{webhookEvents.length ? `${webhookEvents.length} event${webhookEvents.length === 1 ? "" : "s"}` : "Awaiting webhook"}</dd></div>
+              <div><dt>Webhook evidence</dt><dd>{webhookEvents.length ? `${webhookEvents.length} verified event${webhookEvents.length === 1 ? "" : "s"}` : "Awaiting webhook"}</dd></div>
             </dl>
           </div>
 
@@ -89,6 +103,21 @@ export default async function TransactionDetailPage({ params }: { params: Promis
             <div className={`${styles.banner} ${policy?.decision === "BLOCK" ? styles.blocked : styles.allowed}`}>{policy?.decision ?? "PENDING"}</div>
             <div className={styles.checks}>{policy?.checks?.map((check) => <div className={styles.check} key={String(check.rule)}><span>{String(check.result)}</span><strong>{String(check.rule).replaceAll("_", " ")}</strong></div>) ?? <span>Awaiting evaluation.</span>}</div>
           </div>
+        </section>
+
+        <section className={`${styles.card} ${styles.lifecycle}`}>
+          <div className={styles.auditHeader}>
+            <div><p className="eyebrow">Payment lifecycle</p><h2>Razorpay → webhook → merchant confirmation.</h2></div>
+            <span>{webhookEvents.length ? `${webhookEvents.length} webhook events` : "No webhook event yet"}</span>
+          </div>
+          <div className={styles.lifecycleGrid}>
+            {lifecycle.map((step, index) => <div className={`${styles.lifecycleStep} ${step.done ? styles.lifecycleDone : ""}`} key={step.label}>
+              <div className={styles.lifecycleMarker}>{step.done ? "✓" : String(index + 1).padStart(2, "0")}</div>
+              <div><strong>{step.label}</strong><span>{step.detail}</span></div>
+              {index < lifecycle.length - 1 ? <i aria-hidden="true">→</i> : null}
+            </div>)}
+          </div>
+          <div className={styles.lifecycleNote}>{webhookReceived ? "The webhook evidence was accepted only after Razorpay signature verification at the gateway." : "Browser checkout is not treated as the final source of truth; the gateway waits for verified payment evidence and webhook reconciliation."}</div>
         </section>
 
         {basketLines.length > 1 ? (
