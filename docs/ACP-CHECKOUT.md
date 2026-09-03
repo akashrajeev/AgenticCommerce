@@ -2,9 +2,9 @@
 
 ## Purpose
 
-MANDATE now exposes an ACP-shaped merchant checkout session surface using the merchant's **real catalog, real inventory and real quote calculator**.
+MANDATE exposes an ACP-shaped merchant checkout session surface using the merchant's **real catalog, real inventory and real quote calculator**.
 
-The adapter is deliberately placed before the existing MANDATE financial authorization boundary:
+The adapter sits before the existing MANDATE financial authorization boundary:
 
 ```text
 ACP client / buyer agent
@@ -16,24 +16,30 @@ ACP client / buyer agent
 merchant authoritative quote
         |
         v
-MANDATE normalized checkout
+MANDATE checkout binding
+        |
+        v
+signed user mandate
         |
         v
 MANDATE policy + payment authorization
         |
         v
-Razorpay Test Mode
+Razorpay Test Mode Order
+        |
+        v
+Standard Checkout + verification + webhook reconciliation
 ```
 
-This Phase 3 work does **not** claim full ACP wire-level interoperability yet. The create, retrieve, update and cancel surface is implemented; completion is intentionally guarded until the MANDATE payment bridge binds an ACP checkout to a trusted authorization.
+The ACP surface does not own financial authority. It creates an authoritative merchant checkout, presents that checkout for mandate authorization, and then invokes the same trusted MANDATE gateway used by the native transaction flow.
 
 ## Reference protocol
 
 The repository tracks ACP stable version `2026-04-17`. The public ACP specification defines the merchant checkout lifecycle as create, update, retrieve, complete and cancel, with authoritative merchant cart state returned by the merchant. The current specification also requires `API-Version` and uses `Idempotency-Key` on POST checkout operations. citehttps://github.com/agentic-commerce-protocol/agentic-commerce-protocol/blob/main/spec/2026-04-17/openapi/openapi.agentic_checkout.yaml
 
-The current ACP repository's idempotency proposal documents the explicit error model for missing keys, payload conflicts and in-flight requests. MANDATE follows those semantics on its checkout adapter. citehttps://github.com/agentic-commerce-protocol/agentic-commerce-protocol/issues/120
+The ACP repository's idempotency proposal documents explicit error handling for missing keys, payload conflicts and in-flight requests. MANDATE follows those semantics on its checkout adapter. citehttps://github.com/agentic-commerce-protocol/agentic-commerce-protocol/issues/120
 
-The ACP repository also has a known schema issue in the dated checkout specs where some request schemas reference `Item` even though the request examples use `items` with quantities. MANDATE accepts both `items` and `line_items` and normalizes them to the internal merchant line-item model. This is a compatibility choice, not a claim that the external ACP schema is bug-free. citehttps://github.com/agentic-commerce-protocol/agentic-commerce-protocol/issues/264
+The dated ACP checkout specs have also contained schema inconsistencies around request item shapes. MANDATE accepts both `items` and `line_items` and normalizes them to the internal merchant line-item model. This is a compatibility choice, not a claim that the external schema is bug-free. citehttps://github.com/agentic-commerce-protocol/agentic-commerce-protocol/issues/264
 
 ## Implemented surface
 
@@ -43,7 +49,7 @@ The ACP repository also has a known schema issue in the dated checkout specs whe
 | GET | `/checkout_sessions/:id` | Implemented |
 | POST | `/checkout_sessions/:id` | Implemented |
 | POST | `/checkout_sessions/:id/cancel` | Implemented |
-| POST | `/checkout_sessions/:id/complete` | Guarded by MANDATE authorization |
+| POST | `/checkout_sessions/:id/complete` | Implemented with MANDATE authorization bridge |
 
 ### Required headers
 
@@ -78,7 +84,7 @@ ms-001 → Arc Precision Mouse
 
 The adapter never trusts a client-supplied price. It calls the merchant quote builder, which reads the current catalog/inventory and computes the authoritative subtotal, shipping, tax, discount and total.
 
-That means the returned checkout is backed by the same merchant truth used by the existing MANDATE transaction flow.
+That means the checkout session is backed by the same merchant truth used by the existing MANDATE transaction flow.
 
 ## Idempotency
 
@@ -132,7 +138,7 @@ checkout expiry
 
 The client supplies the proposed items. The merchant recomputes the financial state.
 
-This mirrors the central MANDATE invariant:
+This preserves the central MANDATE invariant:
 
 ```text
 Agent proposal
@@ -140,45 +146,112 @@ Agent proposal
 financial authority
 ```
 
-## Completion boundary
+## Phase 4 completion bridge
 
-ACP's complete operation is intended to finalize the payment and create the order. MANDATE intentionally does not let an ACP request bypass the existing payment-authority boundary.
-
-Current Phase 3 behavior:
+`POST /checkout_sessions/:id/complete` now performs a real server-side authorization bridge rather than returning a placeholder success or a fake payment result.
 
 ```text
-POST /checkout_sessions/:id/complete
+ACP checkout session
         |
-        +--> no MANDATE transaction binding
-                 ↓
-          409 mandate_authorization_required
-
-        +--> binding supplied
-                 ↓
-          501 mandate_payment_bridge_pending
+        +-- authoritative cart hash
+        +-- merchant
+        +-- amount
+        +-- quote expiry
+        |
+        v
+signed MANDATE user credential
+        |
+        v
+POST /v1/mandates/authorize
+        |
+        +-- Ed25519 signature verification
+        +-- mandate expiry / identity checks
+        +-- merchant and spend constraints
+        +-- cart-hash validation
+        +-- fresh merchant quote revalidation
+        +-- deterministic MANDATE policy
+        +-- nonce replay protection
+        |
+        v
+Payment Authorization
+        |
+        v
+POST /v1/mandates/:authorizationId/razorpay-order
+        |
+        +-- authorization still active?
+        +-- merchant unchanged?
+        +-- amount/currency unchanged?
+        +-- checkout binding unchanged?
+        |
+        v
+Razorpay Test Mode Order
 ```
 
-The second path is an explicit engineering boundary, not a fake success response. Phase 4 will bind:
+The completion response is `ready_for_payment` rather than `completed` because creating the Razorpay order is not the same thing as proving that a payment has succeeded. The existing Razorpay Standard Checkout, server-side signature verification, capture/reconciliation and webhook path remain the final payment evidence boundary.
+
+### Request shape
+
+The completion request must include a signed MANDATE credential in one of these fields:
+
+```json
+{
+  "mandate": {
+    "mandateId": "mandate_user_...",
+    "subjectId": "user_...",
+    "agentId": "buyer_...",
+    "merchantId": "mandate-market",
+    "purpose": "Buy approved headphones",
+    "maxSpend": { "currency": "INR", "amountPaise": 800000 },
+    "constraints": {},
+    "approvalMode": "human_present",
+    "nonce": "nonce_...",
+    "issuedAt": "...",
+    "expiresAt": "...",
+    "credential": {
+      "algorithm": "Ed25519",
+      "keyId": "...",
+      "publicKeyPem": "...",
+      "signatureBase64": "..."
+    }
+  }
+}
+```
+
+The merchant server forwards the signed mandate to the trusted gateway. The ACP client never receives the Razorpay secret or the internal gateway secret.
+
+## Cryptographic binding
+
+The checkout binding includes:
 
 ```text
-Checkout Session
-      +
-User Mandate
-      +
-cartHash
-      +
-merchant
-      +
-amount
-      +
+checkoutId
+merchantId
+quoteId
+currency
+totalPaise
 expiry
-      ↓
-Payment Authorization
-      ↓
-Razorpay
+line items
+unit prices
+line totals
 ```
 
-Only after that bridge exists should the adapter advertise completion as interoperable.
+MANDATE computes a deterministic SHA-256 cart hash over that canonical representation. Any material change to the merchant, basket, quantity, quoted amount, currency, checkout identifier or expiry changes the binding and causes authorization to fail.
+
+The gateway also stores the resulting authorization artifact on the transaction and persists that artifact with the transaction in PostgreSQL, so the authorization survives a gateway restart.
+
+## Replay protection
+
+A successful mandate authorization consumes its `(mandateId, nonce)` for the lifetime of the transaction record.
+
+```text
+same mandate + same nonce
+        → 409 MANDATE_NONCE_REPLAY
+
+new mandate / new nonce
+        → eligible for fresh authorization
+```
+
+The gateway additionally guards concurrent requests using an in-process nonce claim set, while persisted transaction state prevents replay after restart in the current single-gateway deployment model.
 
 ## Security properties
 
@@ -194,41 +267,42 @@ The adapter enforces:
 - server-computed prices and totals;
 - checkout expiry;
 - immutable completed/canceled/expired sessions;
-- no direct payment execution from the ACP surface.
+- signed Ed25519 mandate verification;
+- mandate spend and merchant restrictions;
+- deterministic policy re-evaluation at authorization time;
+- cryptographic checkout binding;
+- mandate nonce replay protection;
+- authorization persistence in PostgreSQL;
+- no direct Razorpay secret or payment authority in the ACP surface.
 
-## Testing plan
+## Verification coverage
 
-The current CI pipeline continues to run:
+The gateway has regression coverage for:
 
 ```text
-Typecheck
-Unit tests
-Build
+✓ fresh mandate authorization
+✓ signed Ed25519 mandate authorization
+✓ cart-hash tampering rejection
+✓ spend-limit rejection
+✓ product allow-list rejection
+✓ fresh merchant/policy revalidation
+✓ mandate nonce replay rejection
+✓ Razorpay signature boundary
+✓ transaction binding of mandate authorization
 ```
 
-The ACP adapter's next test expansion should cover:
+The ACP completion path is separately wired to exercise the same authorization and Razorpay-order authority rather than bypassing it.
+
+## Implementation status
 
 ```text
-✓ create with live catalog item
-✓ create multi-line basket
-✓ update basket gets a fresh quote
-✓ retrieve returns authoritative current state
-✓ cancel is idempotent
-✓ missing idempotency key is rejected
-✓ same idempotency key replays the original response
-✓ idempotency payload conflict is rejected
-✓ in-flight collision is rejected
-✓ expired session is not payable
-✓ completion cannot bypass MANDATE
-```
-
-## Status
-
-```text
-ACP discovery              IMPLEMENTED
-ACP checkout session CRUD  IMPLEMENTED
-ACP idempotency boundary   IMPLEMENTED
-ACP authoritative quoting  IMPLEMENTED
-ACP completion bridge      PENDING PHASE 4
-Full ACP wire conformance  NOT CLAIMED
+ACP discovery                    IMPLEMENTED
+ACP checkout session CRUD        IMPLEMENTED
+ACP idempotency boundary         IMPLEMENTED
+ACP authoritative quoting       IMPLEMENTED
+ACP → MANDATE authorization      IMPLEMENTED
+MANDATE → Razorpay Test Order   IMPLEMENTED
+Payment verification/webhooks    EXISTING TRUSTED PATH
+Full ACP wire conformance       NOT CLAIMED
+AP2 wire interoperability       NOT CLAIMED
 ```
