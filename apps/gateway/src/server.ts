@@ -5,7 +5,7 @@ import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { createApp } from "./app.js";
 import { authorizeSignedCheckout } from "./mandate-authorization.js";
 import { config } from "./config.js";
-import { acceptNegotiatedOffer } from "./negotiation.js";
+import { acceptNegotiatedOffer, hydrateNegotiationAcceptancesFromPersistence } from "./negotiation.js";
 import {
   createDelegatedMandate,
   getDelegatedMandate,
@@ -247,5 +247,6 @@ initializePersistence()
     hydrateTransactionStore(seed);
     return hydrateDelegatedMandatesFromPersistence();
   })
+  .then(() => hydrateNegotiationAcceptancesFromPersistence())
   .then(() => app.listen(config.port, () => console.log(`MANDATE gateway listening on http://localhost:${config.port}`)))
   .catch((error) => { console.error("MANDATE gateway startup failed", error); process.exitCode = 1; });
