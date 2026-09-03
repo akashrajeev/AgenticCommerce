@@ -10,6 +10,7 @@ export const delegatedMandateExecutionStatusSchema = z.enum(["reserved", "confir
 export const negotiationTurnActorSchema = z.enum(["buyer_agent", "merchant_agent"]);
 export const negotiationTurnTypeSchema = z.enum(["intent", "offer", "selection", "counter", "rejection"]);
 export const negotiationStatusSchema = z.enum(["proposed", "accepted", "rejected", "expired"]);
+export const growthOpportunityTypeSchema = z.enum(["UPSELL", "CROSS_SELL"]);
 
 const metadataSchema = z.record(z.union([z.string(), z.number(), z.boolean(), z.null()]));
 const moneySchema = z.object({
@@ -93,6 +94,23 @@ export const negotiationSessionSchema = z.object({
   selectedOfferId: z.string().min(1).optional(),
   status: negotiationStatusSchema,
   turns: z.array(negotiationTurnSchema).min(1).max(30),
+  createdAt: z.string().datetime(),
+  expiresAt: z.string().datetime(),
+});
+
+export const growthOpportunitySchema = z.object({
+  opportunityId: z.string().min(1),
+  merchantId: z.string().min(1),
+  sourceProductId: z.string().min(1),
+  recommendedProductId: z.string().min(1),
+  type: growthOpportunityTypeSchema,
+  score: z.number(),
+  rationale: z.string().min(1),
+  incrementalRevenue: positiveMoneySchema,
+  projectedBasket: positiveMoneySchema,
+  budgetFit: z.boolean(),
+  sourceQuoteId: z.string().min(1),
+  bundleQuoteId: z.string().min(1),
   createdAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
 });
@@ -244,6 +262,7 @@ export type CommerceIntentInput = z.infer<typeof commerceIntentSchema>;
 export type MerchantOfferInput = z.infer<typeof merchantOfferSchema>;
 export type NegotiationTurnInput = z.infer<typeof negotiationTurnSchema>;
 export type NegotiationSessionInput = z.infer<typeof negotiationSessionSchema>;
+export type GrowthOpportunityInput = z.infer<typeof growthOpportunitySchema>;
 export type CheckoutSessionInput = z.infer<typeof checkoutSessionSchema>;
 export type UserMandateInput = z.infer<typeof userMandateSchema>;
 export type SignedUserMandateInput = z.infer<typeof signedUserMandateSchema>;
