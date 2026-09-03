@@ -7,3 +7,5 @@ export function createHealthStatus(app: AppName): HealthStatus {
     timestamp: new Date().toISOString(),
   };
 }
+
+export * from "./protocol-registry.js";
