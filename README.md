@@ -18,7 +18,7 @@ The system has three trust zones:
 - `packages/types` — shared commerce contracts.
 - `packages/schemas` — request validation schemas.
 - `packages/shared` — shared runtime helpers.
-- `database` — reserved persistence workspace; PostgreSQL is available in Compose.
+- `database` — PostgreSQL persistence schema used by the gateway when `DATABASE_URL` is configured.
 - `docs/CONTEXT.md` — persistent project context for future coding sessions.
 - `docs/razorpay/` — current Razorpay Test Mode, Checkout, Payments, Webhook and MCP research.
 
@@ -58,8 +58,15 @@ The merchant exposes a machine-readable commerce contract:
 - `GET /api/agent/inventory/:id`
 - `POST /api/agent/checkout/preview`
 - `GET /api/agent/checkout/quotes/:id`
+- `GET /api/agent/recommendations?productId=:id&maxSpendPaise=:limit`
 
 The buyer consumes those APIs instead of scraping the storefront.
+
+## Revenue engine
+
+MANDATE also exposes a deterministic merchant-side recommendation engine. It scores eligible upsell and cross-sell candidates using product category fit, shared attributes, rating/review proof, relative price, inventory and an optional spending ceiling. The merchant operations console surfaces these as **agent-assisted opportunities** with an illustrative incremental basket value.
+
+The important boundary is deliberate: the recommendation engine can identify a revenue opportunity, but it cannot create a payment, bypass a policy, or mutate the user's hard spending limit. Any future basket expansion must return to the same merchant quote and gateway policy gate before Razorpay is invoked.
 
 ## AI buyer
 
@@ -77,118 +84,3 @@ The current implementation uses the OpenAI-compatible Responses API. Configure `
 6. Use official Razorpay Test Mode payment credentials/test cards.
 
 See `docs/razorpay/` for the researched details and source links.
-
-## Razorpay MCP
-
-Razorpay also provides an official MCP Server with a broad tool surface, including order/payment operations. MANDATE deliberately does **not** give the buyer unrestricted MCP financial authority.
-
-The production purchase boundary stays:
-
-```text
-AI -> PurchaseIntent -> Policy -> Transaction Authority -> Razorpay
-```
-
-MCP is documented for development assistance, read-only inspection and carefully constrained/audited integrations.
-
-Official remote endpoint documented by Razorpay:
-
-`https://mcp.razorpay.com/mcp`
-
-## Local development
-
-Prerequisites:
-
-- Node.js 22+
-- npm 10+
-- Docker Desktop
-- Razorpay Test Mode credentials
-- API key for the configured model provider
-
-Create local environment files from the examples, then run:
-
-```bash
-npm install
-cp .env.example .env
-cp apps/merchant/.env.example apps/merchant/.env.local
-cp apps/buyer/.env.example apps/buyer/.env.local
-cp apps/gateway/.env.example apps/gateway/.env
-docker compose up --build
-```
-
-Default URLs:
-
-- Merchant: `http://localhost:3000`
-- Merchant operations: `http://localhost:3000/operations`
-- Buyer: `http://localhost:3001`
-- Gateway: `http://localhost:4000`
-- Gateway health: `http://localhost:4000/health`
-
-## Demo
-
-### Successful purchase
-
-Use:
-
-> Buy the best ANC headphones under ₹5,000
-
-Set maximum spend to `5000`, run the buyer, and follow:
-
-`model plan -> quote -> policy -> Razorpay Test Order -> Checkout -> verification -> webhook -> merchant confirmation`
-
-### Policy failure
-
-Set maximum spend to `3000` for a product whose verified total exceeds the limit.
-
-The gateway must display a policy block and must not create a Razorpay Order.
-
-### Payment failure
-
-Use a Razorpay Test Mode failure scenario and verify:
-
-`payment.failed -> failed transaction -> no merchant confirmation`
-
-## Environment variables
-
-### Gateway
-
-- `RAZORPAY_KEY_ID`
-- `RAZORPAY_KEY_SECRET`
-- `RAZORPAY_WEBHOOK_SECRET`
-- `MERCHANT_APP_ORIGIN`
-- `MERCHANT_INTERNAL_URL`
-- `BUYER_APP_ORIGIN`
-- `INTERNAL_GATEWAY_SECRET`
-
-### Buyer server
-
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL`
-- `OPENAI_BASE_URL`
-- `MERCHANT_INTERNAL_URL`
-
-Never use `NEXT_PUBLIC_` for secrets.
-
-## Docker
-
-`docker-compose.yml` contains:
-
-- `postgres`
-- `merchant`
-- `buyer`
-- `gateway`
-
-The public browser URLs stay on `localhost`, while server-to-server calls use Docker service names.
-
-## Validation
-
-```bash
-npm run lint
-npm run typecheck
-npm run build
-```
-
-GitHub Actions also runs typecheck and build on pushes/PRs to `main`.
-
-## Current limitation
-
-The transaction, audit, webhook-deduplication and merchant-order repositories are still in-memory. PostgreSQL is provisioned in Compose but is not yet the application source of truth. The real Razorpay Test Mode integration is implemented independently of that persistence limitation.
