@@ -31,7 +31,24 @@ export type PolicyDecision = { decision: "ALLOW" | "BLOCK"; checks: PolicyCheck[
 export type TransactionState = "intent_proposed" | "price_verified" | "policy_pending" | "policy_authorized" | "policy_blocked" | "razorpay_order_created" | "checkout_started" | "payment_authorized" | "payment_captured" | "payment_verified" | "payment_failed" | "order_confirmed" | "cancelled";
 export type AuditActor = "user" | "ai_buyer" | "policy_engine" | "gateway" | "razorpay" | "merchant";
 export type AuditEvent = { id: string; transactionId: string; actor: AuditActor; action: string; reason: string; metadata?: Record<string, string | number | boolean | null>; createdAt: string };
-export type Transaction = { id: string; state: TransactionState; intent: PurchaseIntent; quote: CheckoutQuote; policy?: PolicyDecision; razorpayOrderId?: string; razorpayPaymentId?: string; createdAt: string; updatedAt: string };
+export type TransactionMandateAuthorization = {
+  authorizationId: string;
+  mandateId: string;
+  checkoutSessionId: string;
+  merchantId: string;
+  amount: MoneyAmount;
+  cartHash: string;
+  paymentRail: string;
+  status: "authorized";
+  createdAt: string;
+  expiresAt: string;
+  nonce: string;
+};
+export type Transaction = {
+  id: string; state: TransactionState; intent: PurchaseIntent; quote: CheckoutQuote; policy?: PolicyDecision;
+  mandateAuthorization?: TransactionMandateAuthorization;
+  razorpayOrderId?: string; razorpayPaymentId?: string; createdAt: string; updatedAt: string;
+};
 
 export * from "./protocol.js";
 export * from "./protocol-adapter.js";
