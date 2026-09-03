@@ -50,6 +50,7 @@ type Transaction = {
   state: string;
   razorpayOrderId?: string;
   mandateAuthorizationId?: string;
+  razorpayPaymentId?: string;
   quote: { totalPaise: number; currency: "INR"; lineItems: Offer["items"] };
 };
 
@@ -166,6 +167,31 @@ export default function NegotiationPage() {
     finally { setBusy(false); }
   }
 
+  async function pollReconciliation(transactionId: string) {
+    const terminal = new Set(["order_confirmed", "payment_failed", "cancelled"]);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      try {
+        const response = await fetch(`${gateway}/v1/transactions`, { cache: "no-store" });
+        if (!response.ok) continue;
+        const body = await response.json() as { transactions?: Transaction[] };
+        const latest = body.transactions?.find((item) => item.id === transactionId);
+        if (latest) {
+          setTransaction((current) => current ? { ...current, ...latest } : latest);
+          if (terminal.has(latest.state)) {
+            if (latest.state === "order_confirmed") setMessage("Webhook/API reconciliation confirmed payment and the merchant order is now confirmed.");
+            else if (latest.state === "payment_failed") setMessage("Razorpay reported a failed payment. No merchant order was confirmed; retry creates a fresh transaction.");
+            return;
+          }
+          if (latest.state === "payment_verified") {
+            setMessage("Payment is verified; waiting for the merchant-order confirmation boundary.");
+          }
+        }
+      } catch { /* bounded demo polling; the transaction remains visible */ }
+    }
+    setMessage("Payment callback received. Webhook reconciliation may still be pending; open the proof page to inspect the transaction timeline.");
+  }
+
   function openRazorpay() {
     if (!transaction || !checkout) return;
     const RazorpayCtor = (window as unknown as { Razorpay?: new (options: Record<string, unknown>) => { open: () => void } }).Razorpay;
@@ -183,7 +209,13 @@ export default function NegotiationPage() {
         const body = await verify.json();
         if (!verify.ok) { setMessage(body.error ?? "Payment verification failed."); return; }
         setTransaction({ ...body.transaction, mandateAuthorizationId: transaction.mandateAuthorizationId });
-        setMessage(body.verified ? "Payment signature verified by the gateway. Wait for webhook reconciliation before merchant fulfillment." : "Payment returned and is awaiting final reconciliation.");
+        if (body.verified) {
+          setMessage("Payment signature verified by the gateway. Waiting for webhook/API reconciliation before merchant fulfillment…");
+          void pollReconciliation(transaction.id);
+        } else {
+          setMessage("Payment returned and is awaiting final reconciliation.");
+          void pollReconciliation(transaction.id);
+        }
       },
     });
     instance.open();
@@ -214,7 +246,7 @@ export default function NegotiationPage() {
             <div className={styles.offerHead}><span className={styles.panelKicker}>MERCHANT OFFERS</span><span>{negotiation.offers.length} available</span></div>
             <div className={styles.offers}>{negotiation.offers.map((offer) => <button key={offer.offerId} className={`${styles.offer} ${offer.offerId === selectedOfferId ? styles.selected : ""}`} onClick={() => setSelectedOfferId(offer.offerId)}><div><strong>{offer.items.map((item) => item.productId).join(" + ")}</strong><small>{offer.offerId} · quote {offer.quoteId}</small></div><div className={styles.offerPrice}>{money(offer.amount.amountPaise)}<small>{offer.offerId === negotiation.selectedOfferId ? "buyer choice" : "available"}</small></div></button>)}</div>
             <div className={styles.selection}><span className={styles.panelKicker}>BUYER DECISION</span><p>{negotiation.buyer.selectionReason}</p><div className={styles.actions}><button className={styles.accept} disabled={busy || !selectedOffer} onClick={() => void acceptOffer(false)}>Accept selected offer</button><button className={styles.tamper} disabled={busy || !selectedOffer} onClick={() => void acceptOffer(true)}>Tamper amount → test block</button></div></div>
-            {transaction && <div className={styles.authorized}><div><span>MANDATE → RAZORPAY</span><strong>Authorized · {money(transaction.quote.totalPaise)}</strong><small>{transaction.id} · authorization {transaction.mandateAuthorizationId ?? "missing"}</small></div>{!checkout ? <button onClick={() => void createRazorpayOrder()} disabled={busy}>Create mandate-gated Test Order →</button> : <button onClick={openRazorpay} disabled={busy}>Open Razorpay Test Checkout ↗</button>}</div>}
+            {transaction && <div className={styles.authorized}><div><span>MANDATE → RAZORPAY</span><strong>{transaction.state === "order_confirmed" ? "Order confirmed" : transaction.state === "payment_verified" ? "Payment verified" : "Authorized"} · {money(transaction.quote.totalPaise)}</strong><small>{transaction.id} · authorization {transaction.mandateAuthorizationId ?? "missing"}{transaction.razorpayPaymentId ? ` · payment ${transaction.razorpayPaymentId}` : ""}</small></div>{!checkout ? <button onClick={() => void createRazorpayOrder()} disabled={busy}>Create mandate-gated Test Order →</button> : <button onClick={openRazorpay} disabled={busy}>Open Razorpay Test Checkout ↗</button>}</div>}
           </> : <div className={styles.empty}><span>↔</span><p>Start a negotiation to see the buyer and merchant agents exchange an intent, live offers and a payment-bound authorization.</p></div>}
         </section>
       </section>
