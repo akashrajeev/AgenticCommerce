@@ -3,12 +3,19 @@ import type { CheckoutLineItem, MerchantOffer, PaymentAuthorization, Transaction
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { config } from "./config.js";
 import { executeDelegatedMandate, delegatedMandateStats } from "./delegated-mandates.js";
-import { loadNegotiationAcceptances, saveNegotiationAcceptance, type PersistedNegotiationAcceptance } from "./persistence-prisma.js";
+import {
+  claimNegotiationAcceptance,
+  loadNegotiationAcceptances,
+  releaseNegotiationAcceptanceClaim,
+  saveNegotiationAcceptance,
+  type PersistedNegotiationAcceptance,
+} from "./persistence-prisma.js";
 import { verifyMerchantOfferAttestation } from "./merchant-credentials.js";
 import { getTransaction } from "./transaction-core.js";
 
 type AcceptedNegotiation = Omit<PersistedNegotiationAcceptance, "createdAt"> & { createdAt?: string };
 const accepted = new Map<string, AcceptedNegotiation>();
+const inFlightAcceptances = new Set<string>();
 
 type MerchantQuoteResponse = {
   quote?: {
@@ -135,6 +142,7 @@ export async function acceptNegotiatedOffer(input: { negotiationId: string; mand
     if (!sameOffer(existing.offer, input.offer)) throw new Error("NEGOTIATION_IDEMPOTENCY_CONFLICT");
     return toAcceptedResult(existing, existing.offer);
   }
+  if (inFlightAcceptances.has(key)) throw new Error("NEGOTIATION_ACCEPTANCE_IN_PROGRESS");
 
   if (!input.negotiationId.trim()) throw new Error("INVALID_NEGOTIATION_ID");
   if (!input.mandateId.trim()) throw new Error("INVALID_NEGOTIATION_MANDATE");
@@ -151,32 +159,46 @@ export async function acceptNegotiatedOffer(input: { negotiationId: string; mand
   const checkoutId = `neg_${input.negotiationId}_${issued.offerId}`;
   const binding = { checkoutId, merchantId: quote.merchantId, quoteId: quote.quoteId, currency: quote.currency, totalPaise: quote.totalPaise, lineItems: quote.lineItems, expiresAt };
   const cartHash = createHash("sha256").update(canonicalizeCheckoutBinding(binding)).digest("hex");
-  const result = await executeDelegatedMandate(input.mandateId, { ...binding, cartHash });
-  const acceptedResult: NegotiatedAcceptanceResult = {
-    replayed: false,
-    transactionId: result.authorization.transaction.id,
-    executionId: result.execution.executionId,
-    authorizationId: result.authorization.authorization.authorizationId,
-    offer: issued,
-    transaction: result.authorization.transaction,
-    authorization: result.authorization.authorization,
-    mandate: delegatedMandateStats(input.mandateId),
-  };
-  const record: PersistedNegotiationAcceptance = {
-    key,
-    negotiationId: input.negotiationId,
-    mandateId: input.mandateId,
-    offer: issued,
-    transactionId: acceptedResult.transactionId,
-    executionId: acceptedResult.executionId,
-    authorizationId: acceptedResult.authorizationId,
-    createdAt: new Date().toISOString(),
-  };
-  await saveNegotiationAcceptance(record);
-  accepted.set(key, { ...record });
-  return acceptedResult;
+
+  inFlightAcceptances.add(key);
+  let claimAcquired = false;
+  let executionCompleted = false;
+  try {
+    claimAcquired = await claimNegotiationAcceptance({ key, negotiationId: input.negotiationId, mandateId: input.mandateId, offerId: input.offer.offerId });
+    if (!claimAcquired) throw new Error("NEGOTIATION_ACCEPTANCE_IN_PROGRESS");
+
+    const result = await executeDelegatedMandate(input.mandateId, { ...binding, cartHash });
+    executionCompleted = true;
+    const acceptedResult: NegotiatedAcceptanceResult = {
+      replayed: false,
+      transactionId: result.authorization.transaction.id,
+      executionId: result.execution.executionId,
+      authorizationId: result.authorization.authorization.authorizationId,
+      offer: issued,
+      transaction: result.authorization.transaction,
+      authorization: result.authorization.authorization,
+      mandate: delegatedMandateStats(input.mandateId),
+    };
+    const record: PersistedNegotiationAcceptance = {
+      key,
+      negotiationId: input.negotiationId,
+      mandateId: input.mandateId,
+      offer: issued,
+      transactionId: acceptedResult.transactionId,
+      executionId: acceptedResult.executionId,
+      authorizationId: acceptedResult.authorizationId,
+      createdAt: new Date().toISOString(),
+    };
+    await saveNegotiationAcceptance(record);
+    accepted.set(key, { ...record });
+    return acceptedResult;
+  } finally {
+    inFlightAcceptances.delete(key);
+    if (claimAcquired && !executionCompleted) await releaseNegotiationAcceptanceClaim(key).catch(() => undefined);
+  }
 }
 
 export function clearNegotiationAcceptanceStore(): void {
   accepted.clear();
+  inFlightAcceptances.clear();
 }
