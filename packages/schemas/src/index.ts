@@ -6,3 +6,4 @@ export const purchaseIntentSchema = z.object({ merchantId: z.string().min(1), pr
 export const checkoutPreviewLineItemSchema = z.object({ productId: z.string().min(1), quantity: z.number().int().positive().max(10) });
 export const checkoutPreviewSchema = z.union([z.object({ productId: z.string().min(1), quantity: z.number().int().positive().max(10), lineItems: z.array(checkoutPreviewLineItemSchema).min(1).max(10).optional() }), z.object({ lineItems: z.array(checkoutPreviewLineItemSchema).min(1).max(10) })]);
 export type MoneyAmountInput = z.infer<typeof moneyAmountSchema>; export type HealthStatusInput = z.infer<typeof healthStatusSchema>; export type PurchaseIntentInput = z.infer<typeof purchaseIntentSchema>; export type CheckoutPreviewInput = z.infer<typeof checkoutPreviewSchema>;
+export * from "./protocol.js";
