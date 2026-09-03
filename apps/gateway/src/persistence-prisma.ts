@@ -33,6 +33,8 @@ export type PersistedNegotiationAcceptance = {
   createdAt: string;
 };
 
+const NEGOTIATION_ACCEPTANCE_CLAIM_TTL_MS = 15 * 60 * 1000;
+
 async function ensureNegotiationAcceptanceTable(prisma: Awaited<ReturnType<typeof getPrisma>>): Promise<void> {
   if (!prisma) return;
   await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS negotiation_acceptances (
@@ -60,6 +62,18 @@ async function ensureNegotiationSessionTable(prisma: Awaited<ReturnType<typeof g
     expires_at TIMESTAMPTZ NOT NULL
   )`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS negotiation_sessions_expires_at_idx ON negotiation_sessions(expires_at)`);
+}
+
+async function ensureNegotiationAcceptanceClaimTable(prisma: Awaited<ReturnType<typeof getPrisma>>): Promise<void> {
+  if (!prisma) return;
+  await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS negotiation_acceptance_claims (
+    key TEXT PRIMARY KEY,
+    negotiation_id TEXT NOT NULL,
+    mandate_id TEXT NOT NULL,
+    offer_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+  )`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS negotiation_acceptance_claims_created_at_idx ON negotiation_acceptance_claims(created_at)`);
 }
 
 export async function saveTransaction(transaction: Transaction): Promise<void> {
@@ -126,9 +140,7 @@ export async function claimWebhookEvent(input: {
     });
     return true;
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
-      return false;
-    }
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") return false;
     throw error;
   }
 }
@@ -189,6 +201,42 @@ export async function deleteNegotiationSession(negotiationId: string): Promise<v
   if (!prisma) return;
   await ensureNegotiationSessionTable(prisma);
   await prisma.negotiationSession.deleteMany({ where: { negotiationId } });
+}
+
+export async function claimNegotiationAcceptance(input: {
+  key: string;
+  negotiationId: string;
+  mandateId: string;
+  offerId: string;
+}): Promise<boolean> {
+  const prisma = await getPrisma();
+  if (!prisma) return true;
+  await ensureNegotiationAcceptanceClaimTable(prisma);
+
+  const cutoff = new Date(Date.now() - NEGOTIATION_ACCEPTANCE_CLAIM_TTL_MS);
+  await prisma.negotiationAcceptanceClaim.deleteMany({ where: { createdAt: { lt: cutoff } } });
+  try {
+    await prisma.negotiationAcceptanceClaim.create({
+      data: {
+        key: input.key,
+        negotiationId: input.negotiationId,
+        mandateId: input.mandateId,
+        offerId: input.offerId,
+        createdAt: new Date(),
+      },
+    });
+    return true;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") return false;
+    throw error;
+  }
+}
+
+export async function releaseNegotiationAcceptanceClaim(key: string): Promise<void> {
+  const prisma = await getPrisma();
+  if (!prisma) return;
+  await ensureNegotiationAcceptanceClaimTable(prisma);
+  await prisma.negotiationAcceptanceClaim.deleteMany({ where: { key } });
 }
 
 export async function saveNegotiationAcceptance(input: PersistedNegotiationAcceptance): Promise<void> {
