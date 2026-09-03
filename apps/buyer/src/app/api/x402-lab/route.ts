@@ -36,7 +36,10 @@ export async function POST(request: Request) {
 
   if (action === "live-settle") {
     if (!body?.paymentPayload || typeof body.paymentPayload !== "object" || Array.isArray(body.paymentPayload)) return NextResponse.json({ status: 400, body: { error: "PAYMENT_PAYLOAD_REQUIRED" } }, { status: 400 });
-    const subjectId = typeof body.subjectId === "string" ? body.subjectId.trim() : "";
+    const payload = body.paymentPayload as Record<string, unknown>;
+    const payloadBody = payload.payload && typeof payload.payload === "object" && !Array.isArray(payload.payload) ? payload.payload as Record<string, unknown> : null;
+    const authorization = payloadBody?.authorization && typeof payloadBody.authorization === "object" && !Array.isArray(payloadBody.authorization) ? payloadBody.authorization as Record<string, unknown> : null;
+    const subjectId = typeof body.subjectId === "string" ? body.subjectId.trim() : typeof authorization?.from === "string" ? authorization.from.trim() : "";
     if (!subjectId) return NextResponse.json({ status: 400, body: { error: "X402_WALLET_SUBJECT_REQUIRED" } }, { status: 400 });
     try {
       const mandateResponse = await fetch(`${X402_SERVICE_URL}/demo/mandate?subjectId=${encodeURIComponent(subjectId)}`, { cache: "no-store" });
