@@ -43,3 +43,4 @@ export type Transaction = {
 export * from "./protocol.js";
 export * from "./protocol-adapter.js";
 export * from "./discovery.js";
+export * from "./merchant-credentials.js";
