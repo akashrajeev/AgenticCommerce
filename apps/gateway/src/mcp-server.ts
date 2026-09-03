@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import express, { type Request } from "express";
 import { config } from "./config.js";
-import { fetchOrder, fetchPayment } from "./razorpay.js";
+import { fetchOrder, fetchPayment, isRazorpayTestMode } from "./razorpay.js";
 
 const app = express();
 const port = Number.parseInt(process.env.MCP_PORT ?? "4100", 10);
@@ -59,24 +59,14 @@ async function callTool(name: string, args: Record<string, unknown>) {
       if (!amountMatches) throw new Error("RAZORPAY_LIVE_AMOUNT_MISMATCH");
       if (!orderMatches) throw new Error("RAZORPAY_LIVE_BINDING_MISMATCH");
       if (!captured) throw new Error("RAZORPAY_LIVE_PAYMENT_NOT_CAPTURED");
-      return {
-        verified: true,
-        testMode: true,
-        transactionId,
-        orderId,
-        paymentId,
-        amountPaise: expectedAmount,
-        currency: payment.currency,
-        order: { id: order.id, status: order.status, amount: order.amount, amountPaid: order.amount_paid, receipt: order.receipt },
-        payment: { id: payment.id, status: payment.status, amount: payment.amount, currency: payment.currency, orderId: payment.order_id, method: payment.method ?? null },
-      };
+      return { verified: true, testMode: true, transactionId, orderId, paymentId, amountPaise: expectedAmount, currency: payment.currency, order: { id: order.id, status: order.status, amount: order.amount, amountPaid: order.amount_paid, receipt: order.receipt }, payment: { id: payment.id, status: payment.status, amount: payment.amount, currency: payment.currency, orderId: payment.order_id, method: payment.method ?? null } };
     }
     default: throw new Error("TOOL_NOT_FOUND");
   }
 }
 
 app.use(express.json({ limit: "64kb" }));
-app.get("/health", (_request, response) => response.json({ app: "mandate-mcp", status: "ok", transport: "streamable-http", protocolVersions: [...protocolVersions], protocolVersion: MODERN_PROTOCOL_VERSION }));
+app.get("/health", (_request, response) => response.json({ app: "mandate-mcp", status: "ok", transport: "streamable-http", protocolVersions: [...protocolVersions], protocolVersion: MODERN_PROTOCOL_VERSION, razorpayTestMode: isRazorpayTestMode() }));
 app.use((request, response, next) => { if (!isLocalOrigin(request.header("origin"))) return response.status(403).json({ error: "INVALID_MCP_ORIGIN" }); if (!authorizedRequest(request)) return response.status(401).json({ error: "UNAUTHORIZED_MCP_CLIENT" }); next(); });
 
 app.post("/mcp", async (request, response) => {
