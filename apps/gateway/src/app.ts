@@ -29,6 +29,9 @@ import {
 } from "./razorpay.js";
 
 const processedWebhookKeys = new Set<string>();
+// Protect the in-memory dedupe boundary from concurrent duplicate deliveries.
+// This remains process-local until the PostgreSQL webhook repository is wired in.
+const processingWebhookKeys = new Set<string>();
 
 function parsePurchaseIntent(body: unknown): Omit<PurchaseIntent, "id"> {
   if (!body || typeof body !== "object") throw new Error("INVALID_REQUEST");
@@ -128,13 +131,18 @@ export function createApp() {
   app.use(cors({ origin: [config.buyerAppOrigin, config.merchantAppOrigin] }));
 
   app.post("/v1/webhooks/razorpay", express.raw({ type: "application/json", limit: "256kb" }), async (request, response) => {
+    let dedupeKey: string | undefined;
+    let claimedProcessing = false;
     try {
       const rawBody = Buffer.isBuffer(request.body) ? request.body.toString("utf8") : "";
       const signature = request.header("x-razorpay-signature") ?? "";
       if (!rawBody || !verifyWebhookSignature(rawBody, signature)) return response.status(400).json({ error: "INVALID_WEBHOOK_SIGNATURE" });
 
-      const dedupeKey = request.header("x-razorpay-event-id") ?? createHash("sha256").update(rawBody).digest("hex");
+      dedupeKey = request.header("x-razorpay-event-id") ?? createHash("sha256").update(rawBody).digest("hex");
       if (processedWebhookKeys.has(dedupeKey)) return response.status(200).json({ received: true, duplicate: true });
+      if (processingWebhookKeys.has(dedupeKey)) return response.status(200).json({ received: true, duplicate: true, processing: true });
+      processingWebhookKeys.add(dedupeKey);
+      claimedProcessing = true;
 
       const payload = JSON.parse(rawBody) as {
         event?: string;
@@ -172,6 +180,8 @@ export function createApp() {
     } catch (error) {
       console.error("Razorpay webhook processing failed", error);
       return response.status(500).json({ error: "WEBHOOK_PROCESSING_FAILED" });
+    } finally {
+      if (claimedProcessing && dedupeKey && !processedWebhookKeys.has(dedupeKey)) processingWebhookKeys.delete(dedupeKey);
     }
   });
 
