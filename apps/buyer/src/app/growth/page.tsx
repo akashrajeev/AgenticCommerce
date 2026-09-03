@@ -57,11 +57,14 @@ export default function GrowthPage() {
     if (!selected || !result) return;
     setBusy(true); setMessage("");
     try {
-      const quoteResponse = await fetch(`${merchant}/api/agent/checkout/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lineItems: [{ productId: selected.sourceProductId, quantity: 1 }, { productId: selected.recommendedProductId, quantity: 1 }] }) });
+      const lineItems = selected.type === "UPSELL"
+        ? [{ productId: selected.recommendedProductId, quantity: 1 }]
+        : [{ productId: selected.sourceProductId, quantity: 1 }, { productId: selected.recommendedProductId, quantity: 1 }];
+      const quoteResponse = await fetch(`${merchant}/api/agent/checkout/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lineItems }) });
       const quoteBody = await quoteResponse.json();
       if (!quoteResponse.ok) throw new Error(quoteBody.error ?? "Bundle quote failed.");
       const quote = quoteBody.quote;
-      const response = await fetch(`${gateway}/v1/purchase-intents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ merchantId: "mandate-market", productId: selected.sourceProductId, quantity: 1, lineItems: [{ productId: selected.sourceProductId, quantity: 1 }, { productId: selected.recommendedProductId, quantity: 1 }], maxSpendPaise: Math.round(Number(budget) * 100), reason: `Approved growth opportunity ${selected.opportunityId}`, quoteId: quote.quoteId }) });
+      const response = await fetch(`${gateway}/v1/purchase-intents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ merchantId: "mandate-market", productId: lineItems[0].productId, quantity: 1, lineItems, maxSpendPaise: Math.round(Number(budget) * 100), reason: `Approved growth opportunity ${selected.opportunityId}`, quoteId: quote.quoteId }) });
       const body = await response.json();
       if (!response.ok || !body.transaction) throw new Error(body.error ?? "Gateway rejected the growth basket.");
       setTransaction(body.transaction as Transaction);
