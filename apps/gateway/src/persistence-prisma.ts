@@ -12,7 +12,7 @@ function jsonValue<T>(value: T) {
 }
 
 export async function saveTransaction(transaction: Transaction): Promise<void> {
-  const prisma = getPrisma();
+  const prisma = await getPrisma();
   if (!prisma) return saveTransactionSql(transaction);
 
   const data = {
@@ -36,7 +36,7 @@ export async function saveTransaction(transaction: Transaction): Promise<void> {
 }
 
 export async function saveAuditEvent(event: AuditEvent): Promise<void> {
-  const prisma = getPrisma();
+  const prisma = await getPrisma();
   if (!prisma) return saveAuditEventSql(event);
 
   await prisma.auditEvent.upsert({
@@ -60,7 +60,7 @@ export async function claimWebhookEvent(input: {
   razorpayOrderId?: string | null;
   razorpayPaymentId?: string | null;
 }): Promise<boolean> {
-  const prisma = getPrisma();
+  const prisma = await getPrisma();
   if (!prisma) return claimWebhookEventSql(input);
 
   try {
@@ -83,7 +83,7 @@ export async function claimWebhookEvent(input: {
 }
 
 export async function releaseWebhookEvent(dedupeKey: string): Promise<void> {
-  const prisma = getPrisma();
+  const prisma = await getPrisma();
   if (!prisma) return releaseWebhookEventSql(dedupeKey);
   await prisma.webhookEvent.deleteMany({ where: { dedupeKey } });
 }
