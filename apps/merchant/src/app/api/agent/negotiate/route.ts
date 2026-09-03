@@ -1,6 +1,6 @@
 import type { MerchantOffer } from "@mandate/types";
-import { buildQuote, MERCHANT_ID, catalog } from "../../../../../lib/catalog";
-import { cleanupExpiredNegotiations, saveNegotiation } from "../../../../../lib/agent-negotiation";
+import { buildQuote, MERCHANT_ID, catalog } from "../../../../lib/catalog";
+import { cleanupExpiredNegotiations, saveNegotiation } from "../../../../lib/agent-negotiation";
 
 type NegotiationRequest = {
   intentId?: unknown;
@@ -46,6 +46,17 @@ function rankCandidates(products: typeof catalog, maxSpendPaise: number) {
 }
 
 export function OPTIONS() { return new Response(null, { status: 204, headers: corsHeaders }); }
+
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  cleanupExpiredNegotiations();
+  const { id } = await context.params;
+  const negotiation = (await import("../../../../lib/agent-negotiation")).getStoredNegotiation(id);
+  if (!negotiation) return Response.json({ error: "NEGOTIATION_NOT_FOUND" }, { status: 404, headers: corsHeaders });
+  return Response.json(negotiation, { headers: { ...corsHeaders, "cache-control": "no-store" } });
+}
 
 export async function POST(request: Request) {
   cleanupExpiredNegotiations();
