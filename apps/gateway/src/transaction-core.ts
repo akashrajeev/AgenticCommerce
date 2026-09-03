@@ -9,6 +9,7 @@ import type {
   TransactionState,
 } from "@mandate/types";
 import { config } from "./config.js";
+import { saveAuditEvent, saveTransaction } from "./persistence.js";
 
 type PurchaseIntentInput = Omit<PurchaseIntent, "id">;
 
@@ -39,6 +40,10 @@ const validTransitions: Record<TransactionState, TransactionState[]> = {
   cancelled: [],
 };
 
+function persist(label: string, operation: () => Promise<void>): void {
+  void operation().catch((error) => console.error(`Persistence write failed: ${label}`, error));
+}
+
 function addAudit(
   transactionId: string,
   actor: AuditEvent["actor"],
@@ -56,12 +61,20 @@ function addAudit(
     createdAt: new Date().toISOString(),
   };
   audit.set(transactionId, [...(audit.get(transactionId) ?? []), event]);
+  persist(`audit:${event.id}`, () => saveAuditEvent(event));
   return event;
 }
 
 export function addWebhookAudit(id: string, action: string, reason: string, metadata?: AuditEvent["metadata"]): AuditEvent {
   if (!transactions.has(id)) throw new Error("TRANSACTION_NOT_FOUND");
   return addAudit(id, "razorpay", action, reason, metadata);
+}
+
+export function hydrateTransactionStore(seed: { transactions: Transaction[]; auditEvents: AuditEvent[] }): void {
+  transactions.clear();
+  audit.clear();
+  for (const transaction of seed.transactions) transactions.set(transaction.id, transaction);
+  for (const event of seed.auditEvents) audit.set(event.transactionId, [...(audit.get(event.transactionId) ?? []), event]);
 }
 
 export async function loadMerchantSnapshot(input: PurchaseIntentInput): Promise<MerchantSnapshot> {
@@ -117,6 +130,7 @@ export async function proposeTransaction(input: PurchaseIntentInput): Promise<Tr
   const transaction: Transaction = { id, state: "intent_proposed", intent: { ...input, id }, quote: { quoteId: input.quoteId, merchantId: input.merchantId, lineItems: [], subtotalPaise: 0, shippingPaise: 0, taxPaise: 0, discountPaise: 0, totalPaise: 0, currency: "INR", expiresAt: now }, createdAt: now, updatedAt: now };
 
   transactions.set(id, transaction);
+  persist(`transaction:${id}`, () => saveTransaction(transaction));
   addAudit(id, "ai_buyer", "USER_INTENT_RECEIVED", "The AI buyer proposed a structured purchase intent.", { merchantId: input.merchantId, productId: input.productId, quantity: input.quantity, maxSpendPaise: input.maxSpendPaise });
 
   let snapshot: MerchantSnapshot;
@@ -135,6 +149,7 @@ export async function proposeTransaction(input: PurchaseIntentInput): Promise<Tr
   transitionTransaction(id, "policy_pending");
   const policy = evaluatePolicy(input, snapshot);
   transaction.policy = policy;
+  persist(`transaction:${id}:policy`, () => saveTransaction(transaction));
   addAudit(id, "policy_engine", policy.decision === "ALLOW" ? "POLICY_ALLOWED" : "POLICY_BLOCKED", policy.decision === "ALLOW" ? "All mandatory transaction policies passed." : "At least one mandatory transaction policy failed.");
 
   transitionTransaction(id, policy.decision === "ALLOW" ? "policy_authorized" : "policy_blocked");
@@ -152,6 +167,7 @@ export function transitionTransaction(id: string, nextState: TransactionState): 
   current.state = nextState;
   current.updatedAt = new Date().toISOString();
   transactions.set(id, current);
+  persist(`transaction:${id}`, () => saveTransaction(current));
   addAudit(id, "gateway", "TRANSACTION_STATE_CHANGED", `Transaction moved from ${previousState} to ${nextState}.`, { fromState: previousState, state: nextState });
   return current;
 }
@@ -165,6 +181,7 @@ export function attachRazorpayOrder(id: string, razorpayOrderId: string): Transa
   }
   transaction.razorpayOrderId = razorpayOrderId;
   transactions.set(id, transaction);
+  persist(`transaction:${id}:razorpay-order`, () => saveTransaction(transaction));
   transitionTransaction(id, "razorpay_order_created");
   addAudit(id, "gateway", "RAZORPAY_ORDER_CREATED", "A Razorpay Test Mode order was created after policy authorization.", { razorpayOrderId });
   return transaction;
@@ -183,15 +200,10 @@ export function recordPayment(id: string, paymentId: string, status: "authorized
   const transaction = getTransaction(id);
   if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
 
-  // Razorpay events are not guaranteed to arrive in the same order as the browser
-  // callback. Never let a late failure event regress an already successful payment.
   const currentState = transaction.state;
   const nonRegressibleStates = new Set<TransactionState>(["payment_captured", "payment_verified", "order_confirmed"]);
   if (status === "failed" && nonRegressibleStates.has(currentState)) {
-    addAudit(id, "razorpay", "PAYMENT_FAILED_IGNORED", "A late Razorpay failure event was received after a successful payment state; transaction state was preserved.", {
-      razorpayPaymentId: paymentId,
-      preservedState: currentState,
-    });
+    addAudit(id, "razorpay", "PAYMENT_FAILED_IGNORED", "A late Razorpay failure event was received after a successful payment state; transaction state was preserved.", { razorpayPaymentId: paymentId, preservedState: currentState });
     return transaction;
   }
   if (status === "failed" && currentState === "payment_failed") {
@@ -201,6 +213,7 @@ export function recordPayment(id: string, paymentId: string, status: "authorized
 
   transaction.razorpayPaymentId = paymentId;
   transactions.set(id, transaction);
+  persist(`transaction:${id}:payment`, () => saveTransaction(transaction));
 
   if (status === "failed") {
     transitionTransaction(id, "payment_failed");
