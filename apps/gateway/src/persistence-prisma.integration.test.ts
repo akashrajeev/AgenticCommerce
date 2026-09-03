@@ -8,7 +8,9 @@ import {
   saveAuditEvent,
   saveTransaction,
 } from "./persistence-prisma.js";
+import { loadPrismaGatewayState } from "./persistence-prisma-read.js";
 import { closePrisma, getPrisma } from "./prisma.js";
+import { getTimeline, getTransaction, hydrateTransactionStore } from "./transaction-core.js";
 
 test("persists financial records and webhook idempotency through Prisma", { skip: !process.env.DATABASE_URL }, async () => {
   await initializePersistence();
@@ -74,6 +76,15 @@ test("persists financial records and webhook idempotency through Prisma", { skip
     assert.equal(persistedAudit?.transactionId, transactionId);
     assert.equal(persistedAudit?.action, auditEvent.action);
 
+    const restored = await loadPrismaGatewayState();
+    const restoredTransaction = restored.transactions.find((item) => item.id === transactionId);
+    assert.equal(restoredTransaction?.state, "policy_authorized");
+    assert.equal(restored.auditEvents.some((event) => event.id === auditId), true);
+
+    hydrateTransactionStore(restored);
+    assert.equal(getTransaction(transactionId)?.state, "policy_authorized");
+    assert.equal(getTimeline(transactionId).some((event) => event.id === auditId), true);
+
     assert.equal(await claimWebhookEvent({ dedupeKey: webhookKey, eventName: "payment.captured" }), true);
     assert.equal(await claimWebhookEvent({ dedupeKey: webhookKey, eventName: "payment.captured" }), false);
 
@@ -84,6 +95,7 @@ test("persists financial records and webhook idempotency through Prisma", { skip
     assert.equal(await prisma.webhookEvent.findUnique({ where: { dedupeKey: webhookKey } }), null);
     assert.equal(await claimWebhookEvent({ dedupeKey: webhookKey, eventName: "payment.captured" }), true);
   } finally {
+    hydrateTransactionStore({ transactions: [], auditEvents: [] });
     await prisma.webhookEvent.deleteMany({ where: { dedupeKey: webhookKey } });
     await prisma.auditEvent.deleteMany({ where: { id: auditId } });
     await prisma.transaction.deleteMany({ where: { id: transactionId } });
