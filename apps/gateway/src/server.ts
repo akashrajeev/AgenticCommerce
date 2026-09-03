@@ -8,6 +8,7 @@ import { config } from "./config.js";
 import { acceptNegotiatedOffer } from "./negotiation.js";
 import {
   createDelegatedMandate,
+  getDelegatedMandate,
   delegatedMandateStats,
   executeDelegatedMandate,
   hydrateDelegatedMandatesFromPersistence,
@@ -17,6 +18,7 @@ import {
 } from "./delegated-mandates.js";
 import { initializePersistence } from "./persistence.js";
 import { attachRazorpayOrder, getTransaction, hydrateTransactionStore } from "./transaction-core.js";
+import { requireTenantPrincipal, type TenantPrincipal } from "./tenant-auth.js";
 import { createOrder, getPublicConfig } from "./razorpay.js";
 
 const app = createApp();
@@ -67,6 +69,22 @@ function parseDelegatedMandateCreate(body: unknown) {
   };
 }
 
+function tenantPrincipal(request: import("express").Request): TenantPrincipal | null {
+  return requireTenantPrincipal(request.header("authorization") ?? undefined);
+}
+
+function enforceMandateOwnership(mandateId: string, principal: TenantPrincipal | null): void {
+  if (!principal) return;
+  const mandate = getDelegatedMandate(mandateId);
+  if (!mandate) throw new Error("DELEGATED_MANDATE_NOT_FOUND");
+  if (mandate.subjectId !== principal.subjectId) throw new Error("DELEGATED_MANDATE_FORBIDDEN");
+}
+
+function internalSecretOrThrow(request: import("express").Request, error = "UNAUTHORIZED_INTERNAL_REQUEST"): void {
+  const provided = request.header("x-mandate-gateway-secret") ?? "";
+  if (!provided || provided !== config.internalGatewaySecret) throw new Error(error);
+}
+
 function parseCheckoutBinding(body: unknown) {
   if (!body || typeof body !== "object") throw new Error("INVALID_DELEGATED_CHECKOUT");
   const value = body as Record<string, unknown>;
@@ -97,26 +115,56 @@ function parseCheckoutBinding(body: unknown) {
 
 app.post("/v1/delegated-mandates", async (request, response) => {
   try {
-    const mandate = await createDelegatedMandate(parseDelegatedMandateCreate(request.body));
-    return response.status(201).json({ mandate, remainingPaise: mandate.totalBudget.amountPaise });
+    const principal = tenantPrincipal(request);
+    const parsed = parseDelegatedMandateCreate(request.body);
+    if (principal && parsed.subjectId && parsed.subjectId !== principal.subjectId) return response.status(403).json({ error: "DELEGATED_MANDATE_SUBJECT_MISMATCH" });
+    const mandate = await createDelegatedMandate({ ...parsed, ...(principal ? { subjectId: principal.subjectId } : {}) });
+    return response.status(201).json({ mandate, remainingPaise: mandate.totalBudget.amountPaise, tenantId: principal?.tenantId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_CREATE_FAILED";
-    return response.status(message.startsWith("INVALID_") || message.includes("EXCEEDS") ? 400 : 422).json({ error: message });
+    const status = message.includes("SUBJECT_MISMATCH") || message.includes("FORBIDDEN") ? 403 : message === "TENANT_AUTH_REQUIRED" || message === "INVALID_TENANT_AUTH" ? 401 : message === "TENANT_AUTH_NOT_CONFIGURED" ? 503 : message.startsWith("INVALID_") || message.includes("EXCEEDS") ? 400 : 422;
+    return response.status(status).json({ error: message });
   }
 });
 
-app.get("/v1/delegated-mandates", (_request, response) => response.json({ mandates: listDelegatedMandates().map((mandate) => delegatedMandateStats(mandate.mandateId)) }));
+app.get("/v1/delegated-mandates", (request, response) => {
+  try {
+    const principal = tenantPrincipal(request);
+    return response.json({ tenantId: principal?.tenantId, mandates: listDelegatedMandates(principal?.subjectId).map((mandate) => delegatedMandateStats(mandate.mandateId)) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_LIST_FAILED";
+    const status = message === "TENANT_AUTH_NOT_CONFIGURED" ? 503 : 401;
+    return response.status(status).json({ error: message });
+  }
+});
 app.get("/v1/delegated-mandates/:mandateId", (request, response) => {
-  const mandate = delegatedMandateStats(request.params.mandateId);
-  if (!mandate) return response.status(404).json({ error: "DELEGATED_MANDATE_NOT_FOUND" });
-  return response.json({ mandate });
+  try {
+    const principal = tenantPrincipal(request);
+    enforceMandateOwnership(request.params.mandateId, principal);
+    const mandate = delegatedMandateStats(request.params.mandateId);
+    if (!mandate) return response.status(404).json({ error: "DELEGATED_MANDATE_NOT_FOUND" });
+    return response.json({ mandate });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_GET_FAILED";
+    const status = message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : message === "DELEGATED_MANDATE_FORBIDDEN" ? 403 : message === "TENANT_AUTH_NOT_CONFIGURED" ? 503 : 401;
+    return response.status(status).json({ error: message });
+  }
 });
 app.post("/v1/delegated-mandates/:mandateId/revoke", async (request, response) => {
-  try { return response.json({ mandate: await revokeDelegatedMandate(request.params.mandateId) }); }
-  catch (error) { const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_REVOKE_FAILED"; return response.status(message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : 409).json({ error: message }); }
+  try {
+    const principal = tenantPrincipal(request);
+    enforceMandateOwnership(request.params.mandateId, principal);
+    return response.json({ mandate: await revokeDelegatedMandate(request.params.mandateId) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_REVOKE_FAILED";
+    const status = message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : message === "DELEGATED_MANDATE_FORBIDDEN" ? 403 : message === "TENANT_AUTH_NOT_CONFIGURED" ? 503 : message === "TENANT_AUTH_REQUIRED" || message === "INVALID_TENANT_AUTH" ? 401 : 409;
+    return response.status(status).json({ error: message });
+  }
 });
 app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) => {
   try {
+    const principal = tenantPrincipal(request);
+    enforceMandateOwnership(request.params.mandateId, principal);
     const checkout = parseCheckoutBinding(request.body?.checkout ?? request.body);
     const result = await executeDelegatedMandate(request.params.mandateId, checkout);
     let paymentOrder: unknown = null;
@@ -140,7 +188,9 @@ app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) 
 });
 app.post("/v1/negotiations/:negotiationId/accept", async (request, response) => {
   try {
+    const principal = tenantPrincipal(request);
     const mandateId = typeof request.body?.mandateId === "string" ? request.body.mandateId.trim() : "";
+    if (mandateId) enforceMandateOwnership(mandateId, principal);
     const parsed = merchantOfferSchema.safeParse(request.body?.offer);
     if (!mandateId) return response.status(400).json({ error: "NEGOTIATION_MANDATE_REQUIRED" });
     if (!parsed.success) return response.status(400).json({ error: "INVALID_NEGOTIATED_OFFER", details: parsed.error.flatten() });
@@ -156,6 +206,7 @@ app.post("/v1/negotiations/:negotiationId/accept", async (request, response) => 
 });
 app.post("/v1/delegated-mandates/settle/:transactionId", async (request, response) => {
   try {
+    internalSecretOrThrow(request, "UNAUTHORIZED_DELEGATED_SETTLEMENT");
     const transaction = getTransaction(request.params.transactionId);
     if (!transaction) return response.status(404).json({ error: "TRANSACTION_NOT_FOUND" });
     const outcome = transaction.state === "order_confirmed" ? "confirmed" : transaction.state === "payment_failed" || transaction.state === "cancelled" ? "released" : null;

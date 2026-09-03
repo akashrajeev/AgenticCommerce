@@ -92,8 +92,11 @@ export function getDelegatedMandate(mandateId: string): DelegatedMandate | undef
   return mandate ? updateStatus(mandate) : undefined;
 }
 
-export function listDelegatedMandates(): DelegatedMandate[] {
-  return [...mandates.values()].map(updateStatus).sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
+export function listDelegatedMandates(subjectId?: string): DelegatedMandate[] {
+  return [...mandates.values()]
+    .filter((mandate) => !subjectId || mandate.subjectId === subjectId)
+    .map(updateStatus)
+    .sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
 }
 
 export async function revokeDelegatedMandate(mandateId: string): Promise<DelegatedMandate> {
