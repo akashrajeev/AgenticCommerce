@@ -2,9 +2,9 @@ import type { CheckoutQuote, MerchantManifest, Product } from "@mandate/types";
 
 export const MERCHANT_ID = "mandate-market";
 export const merchantManifest: MerchantManifest = {
-  name: "Mandate Market", merchantId: MERCHANT_ID, version: "1.2", currency: "INR",
-  capabilities: { catalog: true, productLookup: true, inventory: true, checkoutPreview: true, agentCheckout: true, revenueRecommendations: true, payment: "razorpay" },
-  endpoints: { catalog: "/api/agent/catalog", product: "/api/agent/products/:id", inventory: "/api/agent/inventory/:id", checkoutPreview: "/api/agent/checkout/preview", revenueRecommendations: "/api/agent/recommendations?productId=:id&maxSpendPaise=:limit" },
+  name: "Mandate Market", merchantId: MERCHANT_ID, version: "1.3", currency: "INR",
+  capabilities: { catalog: true, productLookup: true, inventory: true, checkoutPreview: true, agentCheckout: true, revenueRecommendations: true, growthOpportunities: true, payment: "razorpay" },
+  endpoints: { catalog: "/api/agent/catalog", product: "/api/agent/products/:id", inventory: "/api/agent/inventory/:id", checkoutPreview: "/api/agent/checkout/preview", revenueRecommendations: "/api/agent/recommendations?productId=:id&maxSpendPaise=:limit", growthOpportunities: "/api/agent/growth-opportunities?productId=:id&maxSpendPaise=:limit" },
 };
 
 export const catalog: Product[] = [
