@@ -7,54 +7,28 @@ const port = Number.parseInt(process.env.MCP_PORT ?? "4100", 10);
 const mcpToken = process.env.MCP_AGENT_TOKEN ?? "";
 const gatewayBaseUrl = (process.env.MCP_GATEWAY_INTERNAL_URL ?? `http://127.0.0.1:${config.port}`).replace(/\/$/, "");
 const protocolVersions = new Set(["2025-06-18", "2025-11-25", "2026-07-28"]);
+const MODERN_PROTOCOL_VERSION = "2026-07-28";
 
 const tools = [
   {
     name: "mandate_razorpay_create_order",
     description: "Create a Razorpay order only for an already authorized MANDATE transaction. Never provide an amount from the model; the gateway transaction remains authoritative.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        authorizationId: { type: "string", description: "Trusted MANDATE authorization ID." },
-        transactionId: { type: "string", description: "Trusted gateway transaction ID bound to the authorization." },
-      },
-      required: ["authorizationId", "transactionId"],
-    },
+    inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" } }, required: ["authorizationId", "transactionId"] },
   },
   {
     name: "mandate_razorpay_fetch_order",
     description: "Retrieve gateway-authoritative evidence for a Razorpay order after proving the order ID is bound to the supplied transaction.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: { transactionId: { type: "string" }, orderId: { type: "string" } },
-      required: ["transactionId", "orderId"],
-    },
+    inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, orderId: { type: "string" } }, required: ["transactionId", "orderId"] },
   },
   {
     name: "mandate_razorpay_fetch_payment",
     description: "Retrieve gateway-authoritative evidence for a Razorpay payment after proving the payment ID is bound to the supplied transaction.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: { transactionId: { type: "string" }, paymentId: { type: "string" } },
-      required: ["transactionId", "paymentId"],
-    },
+    inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["transactionId", "paymentId"] },
   },
   {
     name: "mandate_razorpay_capture_payment",
     description: "Capture a Razorpay payment through the existing gateway transaction boundary. A valid MANDATE authorization and matching transaction are mandatory.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        authorizationId: { type: "string", description: "Trusted MANDATE authorization ID." },
-        transactionId: { type: "string", description: "Trusted gateway transaction ID." },
-        paymentId: { type: "string", description: "Razorpay payment ID returned by Checkout." },
-      },
-      required: ["authorizationId", "transactionId", "paymentId"],
-    },
+    inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["authorizationId", "transactionId", "paymentId"] },
   },
 ];
 
@@ -81,19 +55,39 @@ async function callTool(name: string, args: Record<string, unknown>) {
 }
 
 app.use(express.json({ limit: "64kb" }));
-app.get("/health", (_request, response) => response.json({ app: "mandate-mcp", status: "ok", transport: "streamable-http", protocolVersions: [...protocolVersions] }));
+app.get("/health", (_request, response) => response.json({ app: "mandate-mcp", status: "ok", transport: "streamable-http", protocolVersions: [...protocolVersions], protocolVersion: MODERN_PROTOCOL_VERSION }));
 app.use((request, response, next) => { if (!isLocalOrigin(request.header("origin"))) return response.status(403).json({ error: "INVALID_MCP_ORIGIN" }); if (!authorizedRequest(request)) return response.status(401).json({ error: "UNAUTHORIZED_MCP_CLIENT" }); next(); });
 
 app.post("/mcp", async (request, response) => {
   const message = request.body as { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown } | null;
   const id = message?.id ?? null;
   if (message?.jsonrpc !== "2.0" || typeof message.method !== "string") return response.status(400).json(jsonRpcError(id, -32600, "Invalid Request"));
-  const protocolVersion = request.header("mcp-protocol-version") ?? (message.params && typeof message.params === "object" ? ((message.params as Record<string, unknown>)._meta as Record<string, unknown> | undefined)?.["io.modelcontextprotocol/protocolVersion"] as string | undefined : undefined);
-  if (protocolVersion && !protocolVersions.has(protocolVersion)) return response.status(400).json(jsonRpcError(id, -32602, "Unsupported MCP protocol version", { supported: [...protocolVersions] }));
+  const protocolVersion = (request.header("mcp-protocol-version") ?? "").trim();
+  if (!protocolVersion || !protocolVersions.has(protocolVersion)) return response.status(400).json(jsonRpcError(id, -32602, "Unsupported or missing MCP protocol version", { supported: [...protocolVersions] }));
+
+  if (protocolVersion === MODERN_PROTOCOL_VERSION) {
+    const headerMethod = (request.header("mcp-method") ?? "").trim();
+    if (!headerMethod || headerMethod !== message.method) return response.status(400).json(jsonRpcError(id, -32602, "Mcp-Method header must match the JSON-RPC method"));
+    if (message.method === "tools/call") {
+      const params = message.params && typeof message.params === "object" ? message.params as Record<string, unknown> : {};
+      const name = typeof params.name === "string" ? params.name : "";
+      const headerName = (request.header("mcp-name") ?? "").trim();
+      if (!name || !headerName || headerName !== name) return response.status(400).json(jsonRpcError(id, -32602, "Mcp-Name header must match the tool name"));
+    }
+  }
+
   try {
-    if (message.method === "initialize") return response.json(jsonRpc(id, { protocolVersion: protocolVersion ?? "2026-07-28", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.1.0" } }));
-    if (message.method === "notifications/initialized" || message.method === "ping") return message.method === "ping" ? response.json(jsonRpc(id, {})) : response.status(202).end();
-    if (message.method === "tools/list") return response.json(jsonRpc(id, { tools }));
+    if (message.method === "server/discover") return response.json(jsonRpc(id, { protocolVersion: MODERN_PROTOCOL_VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.3.0" } }));
+    if (message.method === "initialize") {
+      if (protocolVersion === MODERN_PROTOCOL_VERSION) return response.json(jsonRpcError(id, -32601, "initialize is not supported in MCP 2026-07-28; use server/discover"));
+      return response.json(jsonRpc(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.3.0" } }));
+    }
+    if (message.method === "notifications/initialized") {
+      if (protocolVersion === MODERN_PROTOCOL_VERSION) return response.status(204).end();
+      return response.status(202).end();
+    }
+    if (message.method === "ping") return response.json(jsonRpc(id, {}));
+    if (message.method === "tools/list") return response.json(jsonRpc(id, { tools, ttlMs: 60_000, cacheScope: "private" }));
     if (message.method === "tools/call") { const params = message.params && typeof message.params === "object" ? message.params as Record<string, unknown> : {}; const name = typeof params.name === "string" ? params.name : ""; if (!name) return response.json(jsonRpcError(id, -32602, "Tool name is required")); const result = await callTool(name, asArgs(params.arguments ?? {})); return response.json(jsonRpc(id, { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result })); }
     return response.json(jsonRpcError(id, -32601, `Method not found: ${message.method}`));
   } catch (error) { const messageText = error instanceof Error ? error.message : "MCP_TOOL_FAILED"; return response.json(jsonRpc(id, { content: [{ type: "text", text: messageText }], isError: true })); }
