@@ -9,3 +9,4 @@ coverage/
 *.tsbuildinfo
 .research-cache/
 Dockerfile.local
+apps/gateway/src/generated/prisma/
