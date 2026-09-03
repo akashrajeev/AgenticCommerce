@@ -73,6 +73,31 @@ services:
       timeout: 5s
       retries: 10
 
+  agent-service:
+    build:
+      context: .
+      dockerfile: apps/service/Dockerfile
+    container_name: mandate-agent-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      X402_PORT: 4021
+      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-}
+      X402_PAY_TO: ${X402_PAY_TO:-}
+      X402_SERVICE_ID: ${X402_SERVICE_ID:-mandate-premium-data}
+      X402_SERVICE_NAME: ${X402_SERVICE_NAME:-MANDATE Agent Service}
+      X402_PRICE_ATOMIC: ${X402_PRICE_ATOMIC:-10000}
+      X402_NETWORK: ${X402_NETWORK:-eip155:84532}
+      X402_ASSET: ${X402_ASSET:-0x036CbD53842c5426634e7929541eC2318f3dCF7e}
+      X402_MAX_TIMEOUT_SECONDS: ${X402_MAX_TIMEOUT_SECONDS:-60}
+    ports:
+      - "4021:4021"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4021/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   merchant:
     build:
       context: .
@@ -113,6 +138,7 @@ services:
       MERCHANT_INTERNAL_URL: http://merchant:3000
       MCP_INTERNAL_URL: http://mcp:4100
       MCP_AGENT_TOKEN: ${MCP_AGENT_TOKEN:-mandate-local-mcp}
+      X402_INTERNAL_URL: http://agent-service:4021
     ports:
       - "3001:3001"
     depends_on:
@@ -121,6 +147,8 @@ services:
       merchant:
         condition: service_started
       mcp:
+        condition: service_healthy
+      agent-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
