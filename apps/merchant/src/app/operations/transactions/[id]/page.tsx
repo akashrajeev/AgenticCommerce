@@ -1,5 +1,6 @@
 import Link from "next/link";
 import styles from "./page.module.css";
+import { getMerchantOrderByTransaction } from "../../../../lib/orders";
 
 export const dynamic = "force-dynamic";
 
@@ -44,10 +45,8 @@ export default async function TransactionDetailPage({ params }: { params: Promis
   const basketLines = quote.lineItems?.length ? quote.lineItems : intent.lineItems?.length ? intent.lineItems : intent.productId ? [{ productId: intent.productId, quantity: intent.quantity ?? 1 }] : [];
   const webhookEvents = events.filter((event) => String(event.action).startsWith("WEBHOOK_"));
   const captured = transaction.state === "payment_captured" || transaction.state === "payment_verified" || transaction.state === "order_confirmed";
-  const basketTotal = typeof quote.totalPaise === "number" ? quote.totalPaise : 0;
-  const baseLine = basketLines.length ? basketLines[0] : undefined;
-  const baseLineTotal = typeof baseLine?.quantity === "number" && typeof quote.lineItems?.[0]?.unitPricePaise === "number" ? baseLine.quantity * quote.lineItems[0].unitPricePaise : typeof quote.lineItems?.[0]?.lineTotalPaise === "number" ? quote.lineItems[0].lineTotalPaise : 0;
-  const basketLift = Math.max(basketTotal - baseLineTotal, 0);
+  const merchantOrder = transaction.state === "order_confirmed" ? getMerchantOrderByTransaction(id) : undefined;
+  const basketLift = merchantOrder?.incrementalRevenuePaise ?? 0;
 
   return (
     <main className="ops-page">
@@ -94,26 +93,18 @@ export default async function TransactionDetailPage({ params }: { params: Promis
 
         {basketLines.length > 1 ? (
           <section className={styles.card}>
-            <div className={styles.auditHeader}><div><p className="eyebrow">Approved basket</p><h2>Revenue expansion</h2></div><span>{money(basketLift)} incremental</span></div>
+            <div className={styles.auditHeader}><div><p className="eyebrow">Approved basket</p><h2>Revenue expansion</h2></div><span>{basketLift > 0 ? `+${money(basketLift)} realized` : "No realized uplift"}</span></div>
             <div className={styles.facts}>
-              {basketLines.map((line) => (
-                <div className={styles.fact} key={String(line.productId)}><span>{String(line.productId)}</span><strong>× {line.quantity}</strong></div>
-              ))}
+              {basketLines.map((line) => <div className={styles.fact} key={String(line.productId)}><span>{String(line.productId)}</span><strong>× {line.quantity}</strong></div>)}
             </div>
-            <p className="eyebrow">The additional lines were approved by the user before the gateway evaluated the combined quote.</p>
+            <p className="eyebrow">Additional lines are included only after user approval and the gateway re-evaluates the combined quote.</p>
           </section>
         ) : null}
 
         <section className={`${styles.card} ${styles.audit}`}>
           <div className={styles.auditHeader}><div><p className="eyebrow">Audit trail</p><h2>Every transition, recorded.</h2></div><span>{events.length} events</span></div>
           <div className={styles.auditRows}>
-            {events.map((event) => (
-              <div className={styles.auditRow} key={String(event.id)}>
-                <div className={styles.auditTime}>{new Date(String(event.createdAt)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
-                <div><strong>{String(event.action).replaceAll("_", " ")}</strong><p>{String(event.reason)}</p></div>
-                <span className={styles.auditActor}>{String(event.actor).replaceAll("_", " ")}</span>
-              </div>
-            ))}
+            {events.map((event) => <div className={styles.auditRow} key={String(event.id)}><div className={styles.auditTime}>{new Date(String(event.createdAt)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div><div><strong>{String(event.action).replaceAll("_", " ")}</strong><p>{String(event.reason)}</p></div><span className={styles.auditActor}>{String(event.actor).replaceAll("_", " ")}</span></div>)}
           </div>
         </section>
       </div>
