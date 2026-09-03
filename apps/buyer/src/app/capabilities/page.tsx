@@ -3,8 +3,6 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-const money = (paise: number) => `₹${Math.round(paise / 100).toLocaleString("en-IN")}`;
-
 type Discovery = {
   merchant: { name: string; merchantId: string; version: string; currency: string };
   agent: { agentId: string; agentType: string; name: string; issuer?: string };
@@ -75,7 +73,7 @@ export default function CapabilitiesPage() {
                 {data.capabilities.map((capability) => (
                   <div key={capability.capabilityId} style={{ border: "1px solid #e5e3de", padding: 16 }}>
                     <div style={{ fontSize: 17, fontWeight: 700 }}>{capability.name}</div>
-                    <div style={{ color: "#666", fontSize: 12, marginTop: 8 }}>{capability.method ?? capability.methods.join(" / ")} · {capability.endpoint}</div>
+                    <div style={{ color: "#666", fontSize: 12, marginTop: 8 }}>{capability.methods.join(" / ")} · {capability.endpoint}</div>
                     <div style={{ color: "#1e5b3e", fontSize: 11, fontWeight: 700, marginTop: 10 }}>{capability.protocol.toUpperCase()} · v{capability.version} · {capability.requiresAuthentication ? "AUTHENTICATED" : "PUBLIC"}</div>
                   </div>
                 ))}
