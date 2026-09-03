@@ -46,6 +46,17 @@ CREATE TABLE IF NOT EXISTS negotiation_sessions (
 CREATE INDEX IF NOT EXISTS negotiation_sessions_expires_at_idx
   ON negotiation_sessions(expires_at);
 
+CREATE TABLE IF NOT EXISTS negotiation_acceptance_claims (
+  key TEXT PRIMARY KEY,
+  negotiation_id TEXT NOT NULL,
+  mandate_id TEXT NOT NULL,
+  offer_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS negotiation_acceptance_claims_created_at_idx
+  ON negotiation_acceptance_claims(created_at);
+
 CREATE TABLE IF NOT EXISTS negotiation_acceptances (
   key TEXT PRIMARY KEY,
   negotiation_id TEXT NOT NULL,
