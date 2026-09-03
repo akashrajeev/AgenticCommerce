@@ -14,10 +14,14 @@ Agentic commerce platform for Razorpay Track 01: AI Growth & Agentic Commerce.
 ## Current Architecture
 AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Model-backed Product Decision -> ACP Checkout Session -> Signed MANDATE Authorization -> Deterministic Policy Engine -> Transaction Authority -> Razorpay Test Mode -> Server Verification -> Webhooks -> Merchant Order -> Audit Trail
 
+For delegated/autonomous buying:
+
+User -> Delegated Mandate -> Buyer Agent -> Merchant Quote -> MANDATE Boundary -> Transaction Authority -> Razorpay
+
 ## Trust Zones
-1. AI / probabilistic: reads the live merchant contract/catalog and produces a structured product plan. It cannot authorize payment.
-2. ACP checkout / merchant zone: owns agent-readable checkout session state and authoritative merchant quote construction. It cannot directly create a Razorpay order.
-3. MANDATE trusted control plane: verifies the signed user mandate, binds it to the checkout, revalidates product/inventory/quote, enforces deterministic policy, owns transaction state, creates Razorpay orders, verifies payments/webhooks, and confirms merchant orders.
+1. AI / probabilistic: reads merchant data and proposes/ranks purchases. It cannot authorize payment or expand authority.
+2. ACP checkout / merchant zone: owns agent-readable checkout sessions and authoritative merchant quote construction. It cannot directly create Razorpay orders.
+3. MANDATE trusted control plane: verifies mandates, binds checkout state, revalidates product/inventory/quote, enforces deterministic policy, owns transaction state, creates Razorpay orders, verifies payments/webhooks and confirms merchant orders.
 4. Razorpay payment rail: Test Mode Orders, Standard Checkout, Payments, capture and Webhooks.
 
 ## Security Invariants
@@ -27,21 +31,23 @@ AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Model-backed Product
 - Unverified payment -> confirmed order = FORBIDDEN.
 - Policy BLOCK -> Razorpay order = FORBIDDEN.
 - AI -> spending limit modification = FORBIDDEN.
-- Razorpay API secret and webhook secret must remain server-side.
-- Checkout signature verification must be performed by the gateway.
-- Webhook signature verification uses the raw request body.
-- Duplicate webhook events must be idempotently handled.
-- Webhook ordering must not be assumed.
-- Merchant order confirmation is performed by the trusted gateway using an internal shared secret.
-- A signed mandate must bind the exact merchant checkout identifier, cart, amount, currency and expiry.
-- A successful mandate nonce cannot be reused for another authorization transaction.
+- Razorpay API secret and webhook secret remain server-side.
+- Checkout signature verification is performed by the gateway.
+- Webhook signatures use the raw request body.
+- Duplicate webhook events are idempotently handled.
+- Webhook ordering is not assumed.
+- Merchant order confirmation is performed by the trusted gateway.
+- A signed mandate binds the exact merchant checkout identifier, cart, amount, currency and expiry.
+- A successful mandate nonce cannot authorize a different checkout.
 - ACP completion cannot bypass MANDATE authorization.
+- A delegated agent cannot change its own mandate limits, merchants, products or expiry.
+- Delegated spending is reserved before execution and counted as spent only after authoritative confirmation.
 
 ## Implemented
 
 ### Merchant
 - Modern ecommerce storefront at `apps/merchant`.
-- Structured catalog and realistic seeded products.
+- Structured catalog and seeded products.
 - Agent-readable manifest at `/.well-known/agent-commerce`.
 - Agent catalog/product/inventory endpoints.
 - Deterministic checkout preview and quote generation.
@@ -49,20 +55,19 @@ AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Model-backed Product
 - Trusted merchant-order confirmation endpoint.
 - Merchant operations console at `/operations`.
 - Transaction detail/audit view at `/operations/transactions/:id`.
-- Agent-readable revenue recommendation endpoint at `/api/agent/recommendations?productId=:id&maxSpendPaise=:limit`.
-- Deterministic upsell/cross-sell scoring based on catalog fit, ratings, tags, inventory and customer budget.
+- Agent-readable deterministic revenue recommendations.
 - ACP-shaped checkout session create/retrieve/update/complete/cancel endpoints.
-- ACP checkout completion is wired through the MANDATE authorization and Razorpay order bridge.
+- ACP completion forwards signed mandate authorization to the gateway and returns a Razorpay Test Mode order reference as `ready_for_payment` rather than falsely claiming payment success.
 
 ### Buyer
 - Modern transaction workspace UI.
-- Model-backed structured purchase planning via `/api/agent/purchase-plan`.
-- Buyer planner reads merchant manifest/catalog over HTTP rather than importing merchant source code.
-- Model output is constrained with JSON Schema and product IDs are validated against the live catalog.
-- Hard spending limit is supplied by the application and is not editable by the model.
-- Live checkout totals are used when evaluating budget-constrained product choices.
-- Real Razorpay Standard Checkout launcher.
-- Visible failed-payment recovery flow that starts a fresh transaction and preserves the original failed attempt.
+- Model-backed structured purchase planning.
+- Buyer planner reads merchant manifest/catalog over HTTP.
+- Model output constrained with JSON Schema and live-product validation.
+- Hard spending limit supplied by application, not the model.
+- Live Razorpay Standard Checkout launcher.
+- Failed-payment recovery flow creates a fresh transaction.
+- New delegated-authority workspace at `/delegated-mandates` with mandate creation, budget view, autonomous execution, allow/block feedback and revocation.
 
 ### Gateway
 - Deterministic policy engine with budget, quantity, inventory, merchant, quote-validity and amount-integrity checks.
@@ -71,111 +76,148 @@ AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Model-backed Product
 - Transaction/audit timeline.
 - Real Razorpay REST adapter.
 - Razorpay order creation, payment retrieval, capture and verification.
-- Raw-body webhook endpoint.
-- Webhook signature validation.
-- In-memory plus PostgreSQL-backed transaction/audit persistence boundary.
-- PostgreSQL-backed webhook deduplication claims with release-on-processing-failure.
-- Late/out-of-order payment failure handling that preserves successful terminal evidence.
-- Safe failed-payment retry endpoint: retry re-runs merchant validation and policy and creates a distinct transaction.
+- Raw-body webhook endpoint with signature validation and PostgreSQL dedupe.
+- Late/out-of-order payment failure handling.
+- Safe failed-payment retry endpoint.
 - Merchant order reconciliation after payment verification.
 - Signed Ed25519 user-mandate verification.
-- Deterministic checkout binding and SHA-256 cart hashing.
-- User mandate spend, merchant and product constraints.
-- Mandate nonce replay protection, including concurrent in-process claims.
-- Mandate authorization attached to the transaction record and persisted in PostgreSQL.
+- SHA-256 canonical checkout/cart binding.
+- Mandate nonce replay protection.
+- Mandate authorization attached to and persisted with transactions.
 - Internal MANDATE authorization endpoint at `/v1/mandates/authorize`.
 - Internal mandate-gated Razorpay order endpoint at `/v1/mandates/:authorizationId/razorpay-order`.
+- Reusable delegated mandate model with per-purchase and total budget limits.
+- Merchant/product allow-lists, expiry and revocation.
+- Atomic PostgreSQL budget reservation and delegated execution ledger.
+- Delegated execution API at `/v1/delegated-mandates/:mandateId/execute`.
+- Delegated mandate inspection/revocation APIs.
+- Settlement boundary for delegated executions.
+
+### Shared contracts
+- `packages/types` contains normalized commerce, mandate, authorization and delegated execution types.
+- `packages/schemas` contains corresponding Zod validation schemas.
 
 ### Infrastructure and validation
 - Dockerfiles for merchant, buyer and gateway.
 - Docker Compose services for PostgreSQL, merchant, buyer and gateway.
-- CI workflow for install, typecheck, unit tests and build.
-- Unit tests for deterministic policy behavior, Razorpay signature validation, payment recovery/non-regression and mandate binding/replay behavior.
-- Environment templates with Test Mode credentials kept out of the frontend.
-- Root `.dockerignore` prevents host `node_modules`, build output, secrets and local artifacts from contaminating Docker builds.
+- CI workflow: install, typecheck, unit tests and build.
+- Unit tests cover deterministic policy behavior, Razorpay signature validation, payment recovery, mandate binding/replay, delegated budget/revocation boundaries.
 
 ## Persistence Boundary
-PostgreSQL is the durable gateway backing store when `DATABASE_URL` is configured. Startup hydration loads transactions and audit events into the gateway runtime cache. Transaction/audit writes are persisted asynchronously; the in-process maps remain the hot read path. Webhook dedupe claims are persisted atomically in PostgreSQL.
+PostgreSQL is the durable gateway backing store when `DATABASE_URL` is configured. Gateway startup hydrates transactions, audit events and delegated mandates/executions into runtime maps.
 
-The transaction row now persists `mandate_authorization` as JSONB. Startup performs an additive `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migration so an existing local PostgreSQL volume can pick up the Phase 4 field without destroying data.
+Persistent gateway state includes:
 
-The merchant checkout session and quote stores remain in-memory and are intentionally separate from gateway transaction durability.
+```text
+transactions
+  + mandate_authorization JSONB
+
+audit_events
+webhook_events
+merchant_orders
+delegated_mandates
+delegated_mandate_executions
+```
+
+Delegated budget reservations use an atomic SQL update so multiple gateway instances cannot reserve more than the remaining total budget.
+
+Merchant quote and ACP checkout-session stores remain in-memory and separate from gateway durability.
 
 ## Failure Recovery Contract
-- A policy block is terminal and creates no Razorpay order.
-- A payment failure is terminal for that attempt.
-- A retry never mutates the failed attempt into success; it creates a new transaction and re-runs merchant/policy validation.
-- Late `payment.failed` observations after captured/verified/confirmed states are audited and ignored rather than regressing state.
-- Duplicate webhook deliveries are acknowledged without duplicating state transitions.
-- Missing mandate authorization blocks ACP payment completion.
-- A valid mandate with a changed checkout binding is rejected before Razorpay order creation.
-- Replaying a successful mandate nonce is rejected.
+- Policy block is terminal and creates no Razorpay order.
+- Payment failure is terminal for that attempt.
+- Payment retry creates a new transaction and re-runs merchant/policy validation.
+- Late failed-payment observations after successful evidence do not regress state.
+- Duplicate webhook deliveries do not duplicate state transitions.
+- Changed ACP checkout bindings invalidate authorization.
+- Replayed signed mandate nonces are rejected for different checkouts.
+- Delegated executions that fail before payment-order creation release their budget reservation.
+- Delegated payment attempts remain `reserved` until the underlying transaction reaches `order_confirmed` or `payment_failed`/`cancelled`, at which point the reservation is settled.
 
 ## ACP / Phase 4 Flow
 ACP client
 -> merchant `/checkout_sessions`
 -> authoritative merchant quote + cart hash
--> signed user mandate supplied to `/checkout_sessions/:id/complete`
--> merchant forwards mandate + exact checkout binding to gateway
--> gateway verifies Ed25519 credential
--> gateway checks mandate expiry, identity, spend, merchant and product constraints
--> gateway fetches merchant quote/product/inventory again
--> deterministic policy evaluation
--> authorization artifact attached to transaction and persisted
--> gateway creates Razorpay Test Mode Order
--> ACP completion returns `ready_for_payment` with the Razorpay order reference
--> existing Standard Checkout / verify-payment / capture / webhook path provides payment evidence
--> merchant order confirmed after payment verification
+-> signed user mandate
+-> merchant mandate bridge
+-> gateway Ed25519 verification
+-> mandate expiry/identity/spend/merchant/product checks
+-> fresh merchant quote/product/inventory
+-> deterministic policy
+-> transaction mandate authorization
+-> Razorpay Test Mode order
+-> ACP returns `ready_for_payment`
+-> Standard Checkout / verify-payment / capture / webhook
+-> payment verified
+-> merchant order confirmed
 
-The ACP completion bridge intentionally returns `ready_for_payment`, not `completed`, at Razorpay order creation time. A payment order existing is not evidence that money was successfully captured.
+## Phase 5 Delegated / Autonomous Flow
+User issues a reusable delegated mandate:
 
-## Revenue Growth Flow
-SOURCE PRODUCT
--> merchant recommendation endpoint
--> deterministic upsell/cross-sell ranking
--> budget-aware recommendation
--> customer approval
--> add recommendation to PurchaseIntent
--> same policy gate
--> same Razorpay authority
--> incremental revenue is auditable
+```text
+purpose
+agent
+merchant allow-list
+product allow-list
+max spend per purchase
+total budget
+expiry
+constraints
+```
 
-The recommendation layer must never bypass the existing transaction authority. A recommendation is not authorization.
+The buyer agent then executes qualifying purchases without a new approval prompt:
 
-## UI Principle
-Both merchant and buyer surfaces must remain modern, restrained and product-like.
+```text
+agent request
+-> live merchant quote
+-> canonical cart hash validation
+-> delegated mandate boundary
+-> atomic budget reservation
+-> MANDATE transaction authorization
+-> Razorpay Test Mode order
+```
 
-Avoid generic AI visuals:
-- no purple AI gradients
-- no glassmorphism
-- no glowing cards
-- no giant "AI-powered" hero copy
-- no robot illustrations
-- no fake model-thinking animations
-- no emoji-heavy interface
+Budget accounting is:
 
-Prefer:
-- typography-led hierarchy
-- neutral surfaces
-- subtle borders
-- compact status indicators
-- realistic commerce terminology
-- clear transaction identifiers
-- useful density
+```text
+remaining = totalBudget - spent - reserved
+```
+
+A purchase outside any hard boundary is blocked before authorization/order creation.
+
+Buyer demo page:
+
+```text
+http://localhost:3001/delegated-mandates
+```
+
+Judge-facing sequence:
+
+```text
+Issue mandate: ₹10,000 total / ₹5,000 per purchase / hp-001 only
+        ↓
+Run 1 × approved product
+        ↓
+ALLOWED + reservation
+        ↓
+Run 2 × approved product
+        ↓
+BLOCKED: per-purchase limit
+        ↓
+Revoke mandate
+        ↓
+Further execution BLOCKED
+```
 
 ## Current Limitations
-- Merchant quote and ACP checkout-session stores are still in-memory.
-- Persisted mandate nonce uniqueness is enforced through transaction hydration plus in-process claims; a future horizontally scaled deployment should move nonce claiming to a database-level unique authorization table.
-- MCP is documented/configurable but intentionally not an unrestricted production payment path.
-- The Docker/Test Mode path still needs a real local verification by the developer with Test credentials and a public webhook tunnel/staging URL.
-- Buyer UI should refresh/poll for webhook-only state changes after Checkout closes.
-- Revenue recommendations are deterministic catalog intelligence today; they are not yet connected to a full one-click bundle/upsell transaction flow.
-- Full ACP wire conformance is not claimed; this repository implements an ACP-shaped adapter around MANDATE's stronger payment boundary.
+- Merchant quote and ACP checkout-session persistence is still in-memory.
+- Delegated mandate creation/revocation is currently a demo-facing trusted control endpoint; a production deployment needs authenticated user/session identity and stronger multi-tenant authorization.
+- Persistent mandate nonce uniqueness for cryptographic Phase 4 authorizations remains transaction-backed but a horizontally scaled production implementation should use a dedicated database uniqueness boundary.
+- The Docker/Test Mode path still needs real local verification with developer-supplied Test credentials and public webhook delivery.
+- Buyer UI should refresh/poll after webhook-only payment state changes.
+- Revenue recommendations remain deterministic catalog intelligence rather than a complete campaign orchestrator.
+- Full ACP wire conformance is not claimed.
 - AP2 wire interoperability is not claimed.
 
 ## Next Step
-1. Verify the first green CI run containing the Phase 4 persistence and ACP bridge changes.
-2. Add a buyer/merchant demo path that visibly creates an ACP checkout, supplies a signed mandate, receives a Razorpay Test Order, and continues through the existing Standard Checkout flow.
-3. Add judge-facing proof for mandate tampering, nonce replay and ACP completion blocking.
-4. Run the real Razorpay Test Mode allow/block/failure-retry demonstration with public webhook delivery.
-5. Then move to Phase 5: delegated/autonomous bounded buying where the agent can execute inside a pre-authorized mandate without gaining the ability to widen the mandate or bypass the gateway.
+Phase 6: buyer-agent ↔ merchant-agent negotiation using the existing protocol-neutral offer model, while keeping every accepted offer inside the same MANDATE policy and payment authority.
