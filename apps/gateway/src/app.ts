@@ -19,6 +19,7 @@ import {
   proposeTransaction,
   recordPayment,
   recordPaymentVerified,
+  retryFailedTransaction,
 } from "./transaction-core.js";
 import {
   capturePayment,
@@ -72,12 +73,10 @@ async function reconcileCapturedPayment(transactionId: string, paymentId: string
     if (source === "webhook") addWebhookAudit(transactionId, "WEBHOOK_RECONCILIATED", "Razorpay confirmed a captured payment for an already-confirmed transaction; no state change was required.", { razorpayPaymentId: paymentId, source, alreadyConfirmed: true });
     return transaction;
   }
-
   recordPayment(transactionId, paymentId, "captured");
   if (getTransaction(transactionId)?.state === "payment_captured") recordPaymentVerified(transactionId);
   const verified = getTransactionOrThrow(transactionId);
   if (verified.state !== "payment_verified" && verified.state !== "order_confirmed") return verified;
-
   addWebhookAudit(transactionId, source === "webhook" ? "WEBHOOK_RECONCILIATED" : "CHECKOUT_RECONCILIATED", source === "webhook" ? "Razorpay webhook confirmed the captured payment and triggered reconciliation." : "Browser checkout callback was verified and triggered payment reconciliation.", { razorpayPaymentId: paymentId, source });
   if (verified.state === "payment_verified") await confirmMerchantOrder(verified);
   return confirmOrder(transactionId);
@@ -109,9 +108,7 @@ export function createApp() {
   let persistenceReady: Promise<void> | undefined;
   app.use(async (_request, _response, next) => {
     try {
-      if (!persistenceReady) {
-        persistenceReady = initializePersistence().then((seed) => hydrateTransactionStore(seed));
-      }
+      if (!persistenceReady) persistenceReady = initializePersistence().then((seed) => hydrateTransactionStore(seed));
       await persistenceReady;
       next();
     } catch (error) {
@@ -127,24 +124,16 @@ export function createApp() {
       const rawBody = Buffer.isBuffer(request.body) ? request.body.toString("utf8") : "";
       const signature = request.header("x-razorpay-signature") ?? "";
       if (!rawBody || !verifyWebhookSignature(rawBody, signature)) return response.status(400).json({ error: "INVALID_WEBHOOK_SIGNATURE" });
-
       dedupeKey = request.header("x-razorpay-event-id") ?? createHash("sha256").update(rawBody).digest("hex");
       if (processedWebhookKeys.has(dedupeKey)) return response.status(200).json({ received: true, duplicate: true });
       if (processingWebhookKeys.has(dedupeKey)) return response.status(200).json({ received: true, duplicate: true, processing: true });
       processingWebhookKeys.add(dedupeKey);
       claimedProcessing = true;
 
-      const payload = JSON.parse(rawBody) as {
-        event?: string;
-        payload?: {
-          payment?: { entity?: { id?: string; order_id?: string } };
-          order?: { entity?: { id?: string } };
-        };
-      };
+      const payload = JSON.parse(rawBody) as { event?: string; payload?: { payment?: { entity?: { id?: string; order_id?: string } }; order?: { entity?: { id?: string } } } };
       const event = payload.event ?? "unknown";
       const payment = payload.payload?.payment?.entity;
       const orderId = payment?.order_id ?? payload.payload?.order?.entity?.id;
-
       persistentClaimed = await claimWebhookEvent({ dedupeKey, eventName: event, razorpayOrderId: orderId ?? null, razorpayPaymentId: payment?.id ?? null });
       if (!persistentClaimed) {
         processedWebhookKeys.add(dedupeKey);
@@ -153,7 +142,6 @@ export function createApp() {
 
       const transaction = orderId ? findTransactionByRazorpayOrderId(orderId) : undefined;
       if (transaction) addWebhookAudit(transaction.id, "WEBHOOK_RECEIVED", `Razorpay delivered ${event}.`, { event, razorpayOrderId: orderId ?? null, razorpayPaymentId: payment?.id ?? null, webhookEventId: dedupeKey });
-
       if (transaction && payment?.id) {
         if (event === "payment.failed") recordPayment(transaction.id, payment.id, "failed");
         else if (event === "payment.authorized") recordPayment(transaction.id, payment.id, "authorized");
@@ -163,7 +151,6 @@ export function createApp() {
         const captured = payments.items.find((item) => item.status === "captured");
         if (captured) await reconcileCapturedPayment(transaction.id, captured.id, "webhook");
       }
-
       processedWebhookKeys.add(dedupeKey);
       return response.status(200).json({ received: true, event, matchedTransaction: Boolean(transaction) });
     } catch (error) {
@@ -212,6 +199,17 @@ export function createApp() {
       return response.json({ transaction: updated, checkout: getPublicConfig() });
     } catch (error) {
       return response.status(422).json({ error: error instanceof Error ? error.message : "CHECKOUT_START_FAILED" });
+    }
+  });
+
+  app.post("/v1/transactions/:id/retry-payment", async (request, response) => {
+    try {
+      const original = getTransactionOrThrow(request.params.id);
+      if (original.state !== "payment_failed") return response.status(409).json({ error: "TRANSACTION_NOT_RETRYABLE", state: original.state });
+      const retry = await retryFailedTransaction(original.id);
+      return response.status(201).json({ transaction: retry, retryOfTransactionId: original.id });
+    } catch (error) {
+      return response.status(422).json({ error: error instanceof Error ? error.message : "PAYMENT_RETRY_FAILED" });
     }
   });
 
