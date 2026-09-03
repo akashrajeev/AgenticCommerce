@@ -1,4 +1,4 @@
-import { getCheckoutSession, updateCheckoutSession, formatAcpError, responseHeaders } from "../../../lib/acp-checkout";
+import { assertAcpHeaders, formatAcpError, getCheckoutSession, responseHeaders, updateCheckoutSession } from "../../../lib/acp-checkout";
 
 export const runtime = "nodejs";
 
@@ -6,6 +6,7 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function GET(request: Request, { params }: Params): Promise<Response> {
   try {
+    assertAcpHeaders(request.headers, false);
     const { id } = await params;
     const session = getCheckoutSession(id);
     const headers = new Headers({ "content-type": "application/json", "api-version": "2026-04-17" });
