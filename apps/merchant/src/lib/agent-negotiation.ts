@@ -1,10 +1,11 @@
-import type { MerchantOffer } from "@mandate/types";
+import type { MerchantOffer, MerchantOfferAttestation } from "@mandate/types";
 
 export type StoredNegotiation = {
   negotiationId: string;
   intent: Record<string, unknown>;
   merchant: { agentId: string; agentType: "merchant"; name: string; issuer: string };
   offers: MerchantOffer[];
+  offerAttestations?: MerchantOfferAttestation[];
   turns: Array<Record<string, unknown>>;
   createdAt: string;
   expiresAt: string;
