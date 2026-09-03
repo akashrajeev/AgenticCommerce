@@ -3,9 +3,11 @@ import type { CheckoutLineItem, MerchantOffer, PaymentAuthorization, Transaction
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { config } from "./config.js";
 import { executeDelegatedMandate, delegatedMandateStats } from "./delegated-mandates.js";
+import { loadNegotiationAcceptances, saveNegotiationAcceptance, type PersistedNegotiationAcceptance } from "./persistence-prisma.js";
 import { getTransaction } from "./transaction-core.js";
 
-const accepted = new Map<string, { transactionId: string; executionId: string; authorizationId: string; offer: MerchantOffer }>();
+type AcceptedNegotiation = Omit<PersistedNegotiationAcceptance, "createdAt"> & { createdAt?: string };
+const accepted = new Map<string, AcceptedNegotiation>();
 
 type MerchantQuoteResponse = {
   quote?: {
@@ -54,6 +56,45 @@ function sameOffer(a: MerchantOffer, b: MerchantOffer): boolean {
     && sameItems(a.items, b.items);
 }
 
+function toAcceptedResult(existing: AcceptedNegotiation, offer: MerchantOffer): NegotiatedAcceptanceResult {
+  const transaction = getTransaction(existing.transactionId);
+  if (!transaction?.mandateAuthorization) throw new Error("NEGOTIATION_TRANSACTION_NOT_FOUND");
+  return {
+    replayed: true,
+    transactionId: existing.transactionId,
+    executionId: existing.executionId,
+    authorizationId: existing.authorizationId,
+    offer,
+    transaction,
+    authorization: {
+      authorizationId: existing.authorizationId,
+      mandateId: existing.mandateId,
+      checkoutSessionId: transaction.mandateAuthorization.checkoutSessionId,
+      merchantId: transaction.mandateAuthorization.merchantId,
+      amount: transaction.mandateAuthorization.amount,
+      cartHash: transaction.mandateAuthorization.cartHash,
+      paymentRail: transaction.mandateAuthorization.paymentRail,
+      status: transaction.mandateAuthorization.status,
+      createdAt: transaction.mandateAuthorization.createdAt,
+      expiresAt: transaction.mandateAuthorization.expiresAt,
+      nonce: transaction.mandateAuthorization.nonce,
+    },
+    mandate: delegatedMandateStats(existing.mandateId),
+  };
+}
+
+export function hydrateNegotiationAcceptances(input: PersistedNegotiationAcceptance[]): void {
+  accepted.clear();
+  for (const record of input) {
+    accepted.set(record.key, { ...record });
+  }
+}
+
+export async function hydrateNegotiationAcceptancesFromPersistence(): Promise<void> {
+  if (!config.databaseUrl) return;
+  hydrateNegotiationAcceptances(await loadNegotiationAcceptances());
+}
+
 async function fetchMerchantOfferAttestation(negotiationId: string, offer: MerchantOffer) {
   const response = await fetch(`${config.merchantInternalUrl}/api/agent/negotiate/${encodeURIComponent(negotiationId)}`, { cache: "no-store" });
   if (!response.ok) throw new Error("NEGOTIATION_NOT_FOUND");
@@ -87,30 +128,7 @@ export async function acceptNegotiatedOffer(input: { negotiationId: string; mand
   const existing = accepted.get(key);
   if (existing) {
     if (!sameOffer(existing.offer, input.offer)) throw new Error("NEGOTIATION_IDEMPOTENCY_CONFLICT");
-    const transaction = getTransaction(existing.transactionId);
-    if (!transaction?.mandateAuthorization) throw new Error("NEGOTIATION_TRANSACTION_NOT_FOUND");
-    return {
-      replayed: true,
-      transactionId: existing.transactionId,
-      executionId: existing.executionId,
-      authorizationId: existing.authorizationId,
-      offer: existing.offer,
-      transaction,
-      authorization: {
-        authorizationId: existing.authorizationId,
-        mandateId: input.mandateId,
-        checkoutSessionId: transaction.mandateAuthorization.checkoutSessionId,
-        merchantId: transaction.mandateAuthorization.merchantId,
-        amount: transaction.mandateAuthorization.amount,
-        cartHash: transaction.mandateAuthorization.cartHash,
-        paymentRail: transaction.mandateAuthorization.paymentRail,
-        status: transaction.mandateAuthorization.status,
-        createdAt: transaction.mandateAuthorization.createdAt,
-        expiresAt: transaction.mandateAuthorization.expiresAt,
-        nonce: transaction.mandateAuthorization.nonce,
-      },
-      mandate: delegatedMandateStats(input.mandateId),
-    };
+    return toAcceptedResult(existing, existing.offer);
   }
 
   if (!input.negotiationId.trim()) throw new Error("INVALID_NEGOTIATION_ID");
@@ -139,12 +157,18 @@ export async function acceptNegotiatedOffer(input: { negotiationId: string; mand
     authorization: result.authorization.authorization,
     mandate: delegatedMandateStats(input.mandateId),
   };
-  accepted.set(key, {
+  const record: PersistedNegotiationAcceptance = {
+    key,
+    negotiationId: input.negotiationId,
+    mandateId: input.mandateId,
+    offer: issued,
     transactionId: acceptedResult.transactionId,
     executionId: acceptedResult.executionId,
     authorizationId: acceptedResult.authorizationId,
-    offer: issued,
-  });
+    createdAt: new Date().toISOString(),
+  };
+  await saveNegotiationAcceptance(record);
+  accepted.set(key, { ...record });
   return acceptedResult;
 }
 
