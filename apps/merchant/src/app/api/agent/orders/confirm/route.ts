@@ -58,6 +58,10 @@ export async function POST(request: Request) {
   });
 
   const first = lineItems[0];
+  if (!first) {
+    return Response.json({ error: "INVALID_ORDER_CONFIRMATION" }, { status: 400 });
+  }
+
   const order = createMerchantOrder({
     transactionId,
     productId: first.productId,
