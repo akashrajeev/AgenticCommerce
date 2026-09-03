@@ -36,39 +36,21 @@ function writeJson(response: ServerResponse, status: number, body: unknown, head
   response.end(payload);
 }
 
-function readBody(request: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    request.on("data", (chunk: Buffer) => { body += chunk.toString("utf8"); if (body.length > 64 * 1024) { reject(new Error("REQUEST_TOO_LARGE")); request.destroy(); } });
-    request.on("end", () => resolve(body));
-    request.on("error", reject);
-  });
-}
-
 async function facilitatorStatus(): Promise<FacilitatorStatus> {
   if (!facilitatorUrl) return { configured: false, reachable: false, url: null, status: 0, detail: "X402_FACILITATOR_NOT_CONFIGURED" };
   try {
     const response = await fetch(`${facilitatorUrl.replace(/\/$/, "")}/supported`, { cache: "no-store", signal: AbortSignal.timeout(5000) });
     const supported = await response.json().catch(() => null);
-    return {
-      configured: true,
-      reachable: response.ok,
-      url: facilitatorUrl,
-      status: response.status,
-      detail: response.ok ? "Facilitator /supported reachable" : `Facilitator returned HTTP ${response.status}`,
-      ...(supported === null ? {} : { supported }),
-    };
-  } catch (error) {
-    return { configured: true, reachable: false, url: facilitatorUrl, status: 0, detail: error instanceof Error ? error.message : "X402_FACILITATOR_UNREACHABLE" };
-  }
+    return { configured: true, reachable: response.ok, url: facilitatorUrl, status: response.status, detail: response.ok ? "Facilitator /supported reachable" : `Facilitator returned HTTP ${response.status}`, ...(supported === null ? {} : { supported }) };
+  } catch (error) { return { configured: true, reachable: false, url: facilitatorUrl, status: 0, detail: error instanceof Error ? error.message : "X402_FACILITATOR_UNREACHABLE" }; }
 }
 
-function demoMandate(): X402ServiceMandate {
+function demoMandate(subjectId: string): X402ServiceMandate {
   const now = Date.now();
   const mandate: X402ServiceMandate = {
     version: 1,
     mandateId: `demo-x402-${randomUUID()}`,
-    subjectId: "judge-wallet",
+    subjectId,
     agentId: "judge-browser-agent",
     serviceId,
     network,
@@ -89,74 +71,41 @@ async function handleResource(request: IncomingMessage, response: ServerResponse
   const expected = expectedRequirements();
   const required = buildPaymentRequired(resourceUrl(request), serviceName, priceAtomic, network, asset, payTo, maxTimeoutSeconds);
   const paymentHeader = typeof request.headers["payment-signature"] === "string" ? request.headers["payment-signature"] : "";
-
-  if (!paymentHeader) {
-    const challenge = { ...required, error: "PAYMENT-SIGNATURE header is required" };
-    return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) });
-  }
-
+  if (!paymentHeader) { const challenge = { ...required, error: "PAYMENT-SIGNATURE header is required" }; return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) }); }
   let paymentPayload: X402PaymentPayload;
-  try { paymentPayload = decodeBase64Json<X402PaymentPayload>(paymentHeader); } catch (error) {
-    const challenge = { ...required, error: error instanceof Error ? error.message : "INVALID_PAYMENT_SIGNATURE" };
-    return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) });
-  }
-  if (paymentPayload.x402Version !== 2 || !paymentRequirementMatches(paymentPayload.accepted, expected)) {
-    const challenge = { ...required, error: "PAYMENT_REQUIREMENT_MISMATCH" };
-    return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) });
-  }
-
+  try { paymentPayload = decodeBase64Json<X402PaymentPayload>(paymentHeader); } catch (error) { const challenge = { ...required, error: error instanceof Error ? error.message : "INVALID_PAYMENT_SIGNATURE" }; return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) }); }
+  if (paymentPayload.x402Version !== 2 || !paymentRequirementMatches(paymentPayload.accepted, expected)) { const challenge = { ...required, error: "PAYMENT_REQUIREMENT_MISMATCH" }; return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) }); }
   const mandateHeader = typeof request.headers["x-mandate-service-mandate"] === "string" ? request.headers["x-mandate-service-mandate"] : "";
   if (!mandateHeader) return writeJson(response, 403, { error: "MANDATE_SERVICE_AUTHORIZATION_REQUIRED", detail: "x402 payment authorization is necessary but not sufficient; a signed MANDATE service authorization is required." });
-
   let mandate: X402ServiceMandate;
-  try { mandate = decodeBase64Json<X402ServiceMandate>(mandateHeader); validateX402ServiceMandate(mandate, expected, serviceId); } catch (error) {
-    return writeJson(response, 403, { error: error instanceof Error ? error.message : "X402_MANDATE_INVALID" });
-  }
-
+  try { mandate = decodeBase64Json<X402ServiceMandate>(mandateHeader); validateX402ServiceMandate(mandate, expected, serviceId); } catch (error) { return writeJson(response, 403, { error: error instanceof Error ? error.message : "X402_MANDATE_INVALID" }); }
   if (!facilitatorUrl) return writeJson(response, 503, { error: "X402_FACILITATOR_NOT_CONFIGURED", detail: "Set X402_FACILITATOR_URL to a facilitator that supports the selected scheme/network." });
-
   try {
     const verification = await facilitatorVerify(facilitatorUrl, paymentPayload, expected);
-    if (!verification.isValid) {
-      const challenge = { ...required, error: verification.invalidReason ?? "PAYMENT_INVALID" };
-      return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) });
-    }
-
+    if (!verification.isValid) { const challenge = { ...required, error: verification.invalidReason ?? "PAYMENT_INVALID" }; return writeJson(response, 402, challenge, { "PAYMENT-REQUIRED": encodeBase64Json(challenge) }); }
     const settlement = await facilitatorSettle(facilitatorUrl, paymentPayload, expected);
     const settlementHeader = encodeBase64Json(settlement satisfies X402SettlementResponse);
-    if (!settlement.success) {
-      return writeJson(response, 402, { error: "PAYMENT_SETTLEMENT_FAILED", settlement }, { "PAYMENT-RESPONSE": settlementHeader, "PAYMENT-REQUIRED": encodeBase64Json({ ...required, error: settlement.errorReason ?? "Settlement failed" }) });
-    }
-
+    if (!settlement.success) return writeJson(response, 402, { error: "PAYMENT_SETTLEMENT_FAILED", settlement }, { "PAYMENT-RESPONSE": settlementHeader, "PAYMENT-REQUIRED": encodeBase64Json({ ...required, error: settlement.errorReason ?? "Settlement failed" }) });
     consumeX402ServiceMandate(mandate, expected);
-    lastSettlementProof = {
-      at: new Date().toISOString(),
-      facilitator: facilitatorUrl,
-      payer: verification.payer ?? settlement.payer ?? null,
-      transaction: settlement.transaction,
-      network: settlement.network,
-      amount: settlement.amount ?? expected.amount,
-      serviceId,
-    };
+    lastSettlementProof = { at: new Date().toISOString(), facilitator: facilitatorUrl, payer: verification.payer ?? settlement.payer ?? null, transaction: settlement.transaction, network: settlement.network, amount: settlement.amount ?? expected.amount, serviceId };
     return writeJson(response, 200, { service: serviceId, message: "Paid agent resource delivered by MANDATE-controlled x402 adapter.", payer: verification.payer ?? settlement.payer ?? null, transaction: settlement.transaction, network: settlement.network, amount: settlement.amount ?? expected.amount }, { "PAYMENT-RESPONSE": settlementHeader });
-  } catch (error) {
-    return writeJson(response, 502, { error: error instanceof Error ? error.message : "X402_PAYMENT_PROCESSING_FAILED" });
-  }
+  } catch (error) { return writeJson(response, 502, { error: error instanceof Error ? error.message : "X402_PAYMENT_PROCESSING_FAILED" }); }
 }
 
 const server = createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/health") return writeJson(response, 200, { app: "mandate-x402-service", status: "ok", x402Version: 2, serviceId, network, asset, payToConfigured: Boolean(payTo), facilitatorConfigured: Boolean(facilitatorUrl), configured: Boolean(payTo && facilitatorUrl), demoMandateEnabled: demoMode });
   if (request.method === "GET" && request.url === "/facilitator-status") return writeJson(response, 200, await facilitatorStatus());
   if (request.method === "GET" && request.url === "/proof/latest") return writeJson(response, 200, { settlement: lastSettlementProof, live: Boolean(lastSettlementProof) });
-  if (request.method === "GET" && request.url === "/demo/mandate") {
+  if (request.method === "GET" && request.url?.startsWith("/demo/mandate")) {
     if (!demoMode) return writeJson(response, 404, { error: "X402_DEMO_MANDATE_DISABLED" });
     if (!payTo) return writeJson(response, 503, { error: "X402_SERVICE_NOT_CONFIGURED", detail: "Set X402_PAY_TO before issuing the demo service authorization." });
-    return writeJson(response, 200, { demoOnly: true, warning: "Self-signed demo credential; not a production issuer.", mandate: demoMandate() });
+    const url = new URL(request.url, `http://127.0.0.1:${port}`);
+    const subjectId = url.searchParams.get("subjectId")?.trim() ?? "";
+    if (!subjectId) return writeJson(response, 400, { error: "X402_DEMO_SUBJECT_REQUIRED" });
+    return writeJson(response, 200, { demoOnly: true, warning: "Self-signed demo credential; not a production issuer.", mandate: demoMandate(subjectId) });
   }
   if (request.method === "GET" && request.url === resourcePath) return handleResource(request, response);
   return writeJson(response, 404, { error: "NOT_FOUND" });
 });
 
 server.listen(port, () => console.log(`MANDATE x402 service listening on http://127.0.0.1:${port}${resourcePath}`));
-
-void readBody;
