@@ -32,3 +32,5 @@ export type TransactionState = "intent_proposed" | "price_verified" | "policy_pe
 export type AuditActor = "user" | "ai_buyer" | "policy_engine" | "gateway" | "razorpay" | "merchant";
 export type AuditEvent = { id: string; transactionId: string; actor: AuditActor; action: string; reason: string; metadata?: Record<string, string | number | boolean | null>; createdAt: string };
 export type Transaction = { id: string; state: TransactionState; intent: PurchaseIntent; quote: CheckoutQuote; policy?: PolicyDecision; razorpayOrderId?: string; razorpayPaymentId?: string; createdAt: string; updatedAt: string };
+
+export * from "./protocol.js";
