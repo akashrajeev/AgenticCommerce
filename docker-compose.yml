@@ -83,6 +83,7 @@ services:
       PORT: 3001
       NEXT_PUBLIC_GATEWAY_URL: http://localhost:4000
       NEXT_PUBLIC_MERCHANT_URL: http://localhost:3000
+      GATEWAY_INTERNAL_URL: http://gateway:4000
       MERCHANT_INTERNAL_URL: http://merchant:3000
     ports:
       - "3001:3001"
