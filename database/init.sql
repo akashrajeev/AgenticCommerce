@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   intent JSONB NOT NULL,
   quote JSONB NOT NULL,
   policy JSONB,
+  mandate_authorization JSONB,
   razorpay_order_id TEXT UNIQUE,
   razorpay_payment_id TEXT,
   created_at TIMESTAMPTZ NOT NULL,
