@@ -54,6 +54,32 @@ export type MerchantOffer = {
   expiresAt: string;
 };
 
+export type NegotiationTurnActor = "buyer_agent" | "merchant_agent";
+export type NegotiationTurnType = "intent" | "offer" | "selection" | "counter" | "rejection";
+
+export type NegotiationTurn = {
+  turnId: string;
+  actor: NegotiationTurnActor;
+  type: NegotiationTurnType;
+  message: string;
+  offerId?: string;
+  createdAt: string;
+};
+
+export type NegotiationStatus = "proposed" | "accepted" | "rejected" | "expired";
+
+export type NegotiationSession = {
+  negotiationId: string;
+  intent: CommerceIntent;
+  merchant: AgentIdentity;
+  offers: MerchantOffer[];
+  selectedOfferId?: string;
+  status: NegotiationStatus;
+  turns: NegotiationTurn[];
+  createdAt: string;
+  expiresAt: string;
+};
+
 export type CheckoutSnapshot = {
   checkoutId: string;
   merchantId: string;
