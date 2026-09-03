@@ -10,7 +10,7 @@ import type {
 } from "@mandate/types";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { config } from "./config.js";
-import { proposeTransaction } from "./transaction-core.js";
+import { addMandateAuthorizationAudit, proposeTransaction } from "./transaction-core.js";
 
 export type MandateCheckoutBindingInput = CheckoutBindingInput & {
   cartHash: string;
@@ -136,5 +136,14 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
     createdAt,
     expiresAt,
   };
+  addMandateAuthorizationAudit(transaction.id, {
+    mandateId: checkoutMandate.mandateId,
+    checkoutId: checkoutMandate.checkoutId,
+    authorizationId: authorization.authorizationId,
+    paymentRail: authorization.paymentRail,
+    amountPaise: authorization.amount.amountPaise,
+    cartHash: authorization.cartHash,
+    bindingSignature,
+  });
   return { transaction, checkoutMandate, paymentMandate, authorization, binding, bindingSignature };
 }
