@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import test from "node:test";
 import { clearNegotiationAcceptanceStore, acceptNegotiatedOffer } from "./negotiation.js";
 import { clearDelegatedMandateStore, createDelegatedMandate } from "./delegated-mandates.js";
-import type { CheckoutQuote, MerchantOffer, Product } from "@mandate/types";
+import { canonicalizeMerchantOfferAttestation } from "./merchant-credentials.js";
+import type { CheckoutQuote, MerchantOffer, MerchantOfferAttestation, Product } from "@mandate/types";
 
 const TEST_QUOTE_EXPIRES_AT = new Date(Date.now() + 60_000).toISOString();
 const TEST_OFFER_CREATED_AT = new Date(Date.now() - 1_000).toISOString();
+const keyPair = generateKeyPairSync("ed25519");
+const TEST_CREDENTIAL = {
+  algorithm: "Ed25519" as const,
+  keyId: "merchant-test-key-1",
+  merchantId: "mandate-market",
+  agentId: "merchant-agent:mandate-market",
+  issuer: "mandate-market",
+  publicKeyPem: keyPair.publicKey.export({ format: "pem", type: "spki" }).toString(),
+};
 
 function product(id = "hp-001"): Product {
   return { id, sku: id, name: "SoundMax Pro", slug: "soundmax-pro", category: "headphones", pricePaise: 399900, currency: "INR", rating: 4.6, reviewCount: 1842, inventory: 14, shortDescription: "Wireless ANC headphones.", description: "test", features: [], specifications: {}, tags: ["anc", "wireless"] };
@@ -21,12 +32,17 @@ function offer(): MerchantOffer {
   return { offerId: "offer_negotiation_001", intentId: "intent_negotiation_001", merchantId: q.merchantId, items: q.lineItems, amount: { currency: "INR", amountPaise: q.totalPaise }, quoteId: q.quoteId, conditions: { fulfillment: "standard" }, sourceProtocol: "mandate-native", createdAt: TEST_OFFER_CREATED_AT, expiresAt: q.expiresAt };
 }
 
+function attest(merchantOffer: MerchantOffer): MerchantOfferAttestation {
+  const payload = Buffer.from(canonicalizeMerchantOfferAttestation({ offer: merchantOffer, credential: TEST_CREDENTIAL }), "utf8");
+  return { offerId: merchantOffer.offerId, credential: TEST_CREDENTIAL, signatureBase64: sign(null, payload, keyPair.privateKey).toString("base64") };
+}
+
 async function withMerchantFetch(fn: () => Promise<void>) {
   const originalFetch = globalThis.fetch;
   const q = quote();
   const item = product();
   const merchantOffer = offer();
-  const merchantNegotiation = { negotiationId: "neg_001", offers: [merchantOffer] };
+  const merchantNegotiation = { negotiationId: "neg_001", offers: [merchantOffer], offerAttestations: [attest(merchantOffer)] };
   globalThis.fetch = async (input: RequestInfo | URL) => {
     const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (path.includes("/api/agent/negotiate/neg_001") || path.includes("/api/agent/negotiate/neg_002") || path.includes("/api/agent/negotiate/neg_003")) return new Response(JSON.stringify({ ...merchantNegotiation, negotiationId: path.includes("neg_002") ? "neg_002" : path.includes("neg_003") ? "neg_003" : "neg_001" }), { status: 200 });
@@ -50,7 +66,7 @@ test("accepts an authoritative merchant offer through a delegated mandate", asyn
   });
 });
 
-test("replays the same offer idempotently and rejects changed payloads", async () => {
+test("replays the same signed offer idempotently and rejects changed payloads", async () => {
   await withMerchantFetch(async () => {
     const mandate = await createDelegatedMandate({ subjectId: "user_001", agentId: "buyer-agent:mandate-demo", purpose: "Negotiated headphones", merchantIds: ["mandate-market"], allowedProductIds: ["hp-001"], maxSpendPerPurchase: { currency: "INR", amountPaise: 500000 }, totalBudget: { currency: "INR", amountPaise: 1000000 }, expiresAt: new Date(Date.now() + 60_000).toISOString() });
     const acceptedOffer = offer();
@@ -65,4 +81,21 @@ test("replays the same offer idempotently and rejects changed payloads", async (
     const attestationTamper = { ...acceptedOffer, amount: { currency: "INR" as const, amountPaise: 481882 } };
     await assert.rejects(() => acceptNegotiatedOffer({ negotiationId: "neg_003", mandateId: mandate.mandateId, offer: attestationTamper }), /NEGOTIATED_OFFER_ATTESTATION_MISMATCH/);
   });
+});
+
+test("rejects an unsigned merchant offer before execution", async () => {
+  const originalFetch = globalThis.fetch;
+  const q = quote();
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (path.includes("/api/agent/negotiate/unsigned")) return new Response(JSON.stringify({ negotiationId: "unsigned", offers: [offer()] }), { status: 200 });
+    if (path.includes("/api/agent/checkout/quotes/")) return new Response(JSON.stringify({ quote: q }), { status: 200 });
+    throw new Error(`Unexpected fetch: ${path}`);
+  };
+  try {
+    const mandate = await createDelegatedMandate({ subjectId: "user_001", agentId: "buyer-agent:mandate-demo", purpose: "Negotiated headphones", merchantIds: ["mandate-market"], allowedProductIds: ["hp-001"], maxSpendPerPurchase: { currency: "INR", amountPaise: 500000 }, totalBudget: { currency: "INR", amountPaise: 1000000 }, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    await assert.rejects(() => acceptNegotiatedOffer({ negotiationId: "unsigned", mandateId: mandate.mandateId, offer: offer() }), /NEGOTIATED_OFFER_SIGNATURE_REQUIRED/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
