@@ -1,8 +1,9 @@
 import type { MerchantOffer } from "@mandate/types";
 import { buildQuote, MERCHANT_ID, catalog } from "../../../../lib/catalog";
 import { cleanupExpiredNegotiations, saveNegotiation } from "../../../../lib/agent-negotiation";
+import { signMerchantOffer } from "../../../../lib/agent-identity";
 
-type NegotiationRequest = {
+ type NegotiationRequest = {
   intentId?: unknown;
   buyerAgentId?: unknown;
   purpose?: unknown;
@@ -81,6 +82,7 @@ export async function POST(request: Request) {
   }
   if (!offers.length) return Response.json({ error: "MERCHANT_AGENT_NO_ELIGIBLE_OFFER" }, { status: 422, headers: corsHeaders });
 
+  const offerAttestations = offers.map((offer) => ({ offerId: offer.offerId, ...signMerchantOffer(offer) }));
   const negotiationId = `neg_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
   const createdAt = new Date().toISOString();
   const expiresAt = offers.reduce((earliest, offer) => offer.expiresAt < earliest ? offer.expiresAt : earliest, offers[0]!.expiresAt);
@@ -89,6 +91,6 @@ export async function POST(request: Request) {
     ...offers.map((offer) => ({ turnId: `turn_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`, actor: "merchant_agent" as const, type: "offer" as const, offerId: offer.offerId, message: `Merchant agent offers ${offer.items.map((item) => item.productId).join(", ")} at ₹${(offer.amount.amountPaise / 100).toFixed(2)} using quote ${offer.quoteId}.`, createdAt: new Date().toISOString() })),
   ];
   const intent = { intentId, buyer: { agentId: buyerAgentId || "buyer-agent:mandate-demo", agentType: "buyer" as const, name: "MANDATE Buyer Agent" }, merchantId: MERCHANT_ID, purpose, items: offers[0]!.items.map((item) => ({ productId: item.productId, quantity: item.quantity })), maxSpend: { currency: "INR" as const, amountPaise: maxSpendPaise }, currency: "INR" as const, constraints: { category: category ?? null }, sourceProtocol, createdAt, expiresAt };
-  saveNegotiation({ negotiationId, intent, merchant: merchantAgent, offers, turns, createdAt, expiresAt });
-  return Response.json({ negotiationId, intent, merchant: merchantAgent, offers, turns }, { headers: { ...corsHeaders, "cache-control": "no-store" } });
+  saveNegotiation({ negotiationId, intent, merchant: merchantAgent, offers, offerAttestations, turns, createdAt, expiresAt });
+  return Response.json({ negotiationId, intent, merchant: merchantAgent, offers, offerAttestations, turns }, { headers: { ...corsHeaders, "cache-control": "no-store" } });
 }
