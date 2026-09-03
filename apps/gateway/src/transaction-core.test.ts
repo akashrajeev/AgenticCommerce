@@ -5,8 +5,8 @@ import { evaluatePolicy } from "./transaction-core.js";
 
 type Snapshot = Parameters<typeof evaluatePolicy>[1];
 
-test("policy allows an in-budget, in-stock transaction", () => {
-  const product = {
+function makeProduct(overrides: Partial<Product> = {}): Product {
+  return {
     id: "hp-001",
     sku: "MM-HP-001",
     name: "SoundMax Pro",
@@ -22,9 +22,12 @@ test("policy allows an in-budget, in-stock transaction", () => {
     features: ["Active noise cancellation"],
     specifications: { anc: "true" },
     tags: ["anc"],
-  } satisfies Product;
+    ...overrides,
+  };
+}
 
-  const quote: CheckoutQuote = {
+function makeQuote(product: Product, overrides: Partial<CheckoutQuote> = {}): CheckoutQuote {
+  return {
     quoteId: "quote_test",
     merchantId: "mandate-market",
     lineItems: [{ productId: product.id, quantity: 1, unitPricePaise: product.pricePaise, lineTotalPaise: product.pricePaise }],
@@ -35,57 +38,95 @@ test("policy allows an in-budget, in-stock transaction", () => {
     totalPaise: product.pricePaise,
     currency: "INR",
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    ...overrides,
   };
+}
 
-  const decision = evaluatePolicy(
-    { merchantId: "mandate-market", productId: product.id, quantity: 1, maxSpendPaise: 500000, reason: "buy it", quoteId: quote.quoteId },
+function evaluate(product: Product, quote: CheckoutQuote, input: Partial<Parameters<typeof evaluatePolicy>[0]> = {}) {
+  return evaluatePolicy(
+    { merchantId: "mandate-market", productId: product.id, quantity: 1, maxSpendPaise: 500000, reason: "buy it", quoteId: quote.quoteId, ...input },
     { product, quote, inventory: product.inventory } satisfies Snapshot,
   );
+}
+
+test("policy allows an in-budget, in-stock transaction", () => {
+  const product = makeProduct();
+  const decision = evaluate(product, makeQuote(product));
 
   assert.equal(decision.decision, "ALLOW");
   assert.ok(decision.checks.every((check) => check.result === "PASS"));
 });
 
 test("policy blocks when verified total exceeds the user limit", () => {
-  const product = {
-    id: "hp-001", sku: "MM-HP-001", name: "SoundMax Pro", slug: "soundmax-pro", category: "headphones",
-    pricePaise: 399900, currency: "INR", rating: 4.6, reviewCount: 10, inventory: 4,
-    shortDescription: "ANC headphones", description: "ANC headphones", features: ["ANC"], specifications: { anc: "true" }, tags: ["anc"],
-  } satisfies Product;
-  const quote: CheckoutQuote = {
-    quoteId: "quote_test_2", merchantId: "mandate-market",
+  const product = makeProduct();
+  const quote = makeQuote(product, {
+    quoteId: "quote_test_2",
+    totalPaise: 510000,
+    subtotalPaise: 510000,
     lineItems: [{ productId: product.id, quantity: 1, unitPricePaise: product.pricePaise, lineTotalPaise: 510000 }],
-    subtotalPaise: 510000, shippingPaise: 0, taxPaise: 0, discountPaise: 0, totalPaise: 510000,
-    currency: "INR", expiresAt: new Date(Date.now() + 60_000).toISOString(),
-  };
+  });
 
-  const decision = evaluatePolicy(
-    { merchantId: "mandate-market", productId: product.id, quantity: 1, maxSpendPaise: 500000, reason: "buy it", quoteId: quote.quoteId },
-    { product, quote, inventory: product.inventory } satisfies Snapshot,
-  );
-
+  const decision = evaluate(product, quote);
   assert.equal(decision.decision, "BLOCK");
   assert.equal(decision.checks.find((check) => check.rule === "MAX_SPEND")?.result, "FAIL");
 });
 
 test("policy blocks an expired quote", () => {
-  const product = {
-    id: "hp-001", sku: "MM-HP-001", name: "SoundMax Pro", slug: "soundmax-pro", category: "headphones",
-    pricePaise: 399900, currency: "INR", rating: 4.6, reviewCount: 10, inventory: 4,
-    shortDescription: "ANC headphones", description: "ANC headphones", features: ["ANC"], specifications: { anc: "true" }, tags: ["anc"],
-  } satisfies Product;
-  const quote: CheckoutQuote = {
-    quoteId: "quote_test_3", merchantId: "mandate-market",
-    lineItems: [{ productId: product.id, quantity: 1, unitPricePaise: product.pricePaise, lineTotalPaise: product.pricePaise }],
-    subtotalPaise: product.pricePaise, shippingPaise: 0, taxPaise: 0, discountPaise: 0, totalPaise: product.pricePaise,
-    currency: "INR", expiresAt: new Date(Date.now() - 60_000).toISOString(),
-  };
+  const product = makeProduct();
+  const quote = makeQuote(product, { quoteId: "quote_test_3", expiresAt: new Date(Date.now() - 60_000).toISOString() });
 
-  const decision = evaluatePolicy(
-    { merchantId: "mandate-market", productId: product.id, quantity: 1, maxSpendPaise: 500000, reason: "buy it", quoteId: quote.quoteId },
-    { product, quote, inventory: product.inventory } satisfies Snapshot,
-  );
-
+  const decision = evaluate(product, quote);
   assert.equal(decision.decision, "BLOCK");
   assert.equal(decision.checks.find((check) => check.rule === "QUOTE_VALIDITY")?.result, "FAIL");
+});
+
+test("policy blocks quantity above the configured limit", () => {
+  const product = makeProduct();
+  const quote = makeQuote(product, {
+    quoteId: "quote_test_4",
+    lineItems: [{ productId: product.id, quantity: 11, unitPricePaise: product.pricePaise, lineTotalPaise: product.pricePaise * 11 }],
+    totalPaise: product.pricePaise * 11,
+    subtotalPaise: product.pricePaise * 11,
+  });
+
+  const decision = evaluate(product, quote, { quantity: 11 });
+  assert.equal(decision.decision, "BLOCK");
+  assert.equal(decision.checks.find((check) => check.rule === "QUANTITY_LIMIT")?.result, "FAIL");
+});
+
+test("policy blocks when inventory cannot satisfy the request", () => {
+  const product = makeProduct({ inventory: 1 });
+  const quote = makeQuote(product, {
+    quoteId: "quote_test_5",
+    lineItems: [{ productId: product.id, quantity: 2, unitPricePaise: product.pricePaise, lineTotalPaise: product.pricePaise * 2 }],
+    totalPaise: product.pricePaise * 2,
+    subtotalPaise: product.pricePaise * 2,
+  });
+
+  const decision = evaluate(product, quote, { quantity: 2 });
+  assert.equal(decision.decision, "BLOCK");
+  assert.equal(decision.checks.find((check) => check.rule === "INVENTORY")?.result, "FAIL");
+});
+
+test("policy blocks a quote belonging to another merchant", () => {
+  const product = makeProduct();
+  const quote = makeQuote(product, { quoteId: "quote_test_6", merchantId: "other-merchant" });
+
+  const decision = evaluate(product, quote);
+  assert.equal(decision.decision, "BLOCK");
+  assert.equal(decision.checks.find((check) => check.rule === "MERCHANT")?.result, "FAIL");
+});
+
+test("policy blocks when the quote line item does not match the current product price", () => {
+  const product = makeProduct();
+  const quote = makeQuote(product, {
+    quoteId: "quote_test_7",
+    lineItems: [{ productId: product.id, quantity: 1, unitPricePaise: 350000, lineTotalPaise: 350000 }],
+    totalPaise: 350000,
+    subtotalPaise: 350000,
+  });
+
+  const decision = evaluate(product, quote);
+  assert.equal(decision.decision, "BLOCK");
+  assert.equal(decision.checks.find((check) => check.rule === "AMOUNT_INTEGRITY")?.result, "FAIL");
 });
