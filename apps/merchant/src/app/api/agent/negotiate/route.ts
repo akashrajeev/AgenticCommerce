@@ -1,4 +1,5 @@
-import { buildQuote, findProduct, MERCHANT_ID, catalog } from "../../../../../lib/catalog";
+import type { MerchantOffer } from "@mandate/types";
+import { buildQuote, MERCHANT_ID, catalog } from "../../../../../lib/catalog";
 
 type NegotiationRequest = {
   intentId?: unknown;
@@ -10,14 +11,21 @@ type NegotiationRequest = {
   sourceProtocol?: unknown;
 };
 
-type Candidate = {
-  productId: string;
-  quantity: number;
+type StoredNegotiation = {
+  negotiationId: string;
+  intent: Record<string, unknown>;
+  merchant: typeof merchantAgent;
+  offers: MerchantOffer[];
+  turns: Array<Record<string, unknown>>;
+  createdAt: string;
+  expiresAt: string;
 };
+
+const negotiations = new Map<string, StoredNegotiation>();
 
 const corsHeaders = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
   "access-control-allow-headers": "content-type",
 };
 
@@ -52,19 +60,36 @@ function rankCandidates(products: typeof catalog, maxSpendPaise: number) {
     .sort((a, b) => b.score - a.score);
 }
 
+function cleanupExpiredNegotiations() {
+  const now = Date.now();
+  for (const [id, negotiation] of negotiations) {
+    if (new Date(negotiation.expiresAt).getTime() <= now) negotiations.delete(id);
+  }
+}
+
 export function OPTIONS() {
   return new Response(null, { status: 204, headers: corsHeaders });
 }
 
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  cleanupExpiredNegotiations();
+  const { id } = await context.params;
+  const negotiation = negotiations.get(id);
+  if (!negotiation) return Response.json({ error: "NEGOTIATION_NOT_FOUND" }, { status: 404, headers: corsHeaders });
+  return Response.json(negotiation, { headers: { ...corsHeaders, "cache-control": "no-store" } });
+}
+
 export async function POST(request: Request) {
+  cleanupExpiredNegotiations();
   const body = await request.json().catch(() => null) as NegotiationRequest | null;
   const intentId = typeof body?.intentId === "string" && body.intentId.trim() ? body.intentId.trim() : `intent_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
   const buyerAgentId = typeof body?.buyerAgentId === "string" ? body.buyerAgentId.trim() : "buyer-agent:mandate-demo";
   const purpose = typeof body?.purpose === "string" ? body.purpose.trim() : "";
   const maxSpendPaise = typeof body?.maxSpendPaise === "number" ? body.maxSpendPaise : NaN;
-  if (!purpose || !Number.isSafeInteger(maxSpendPaise) || maxSpendPaise <= 0) {
-    return Response.json({ error: "INVALID_NEGOTIATION_REQUEST" }, { status: 400, headers: corsHeaders });
-  }
+  if (!purpose || !Number.isSafeInteger(maxSpendPaise) || maxSpendPaise <= 0) return Response.json({ error: "INVALID_NEGOTIATION_REQUEST" }, { status: 400, headers: corsHeaders });
 
   const category = typeof body?.category === "string" && body.category.trim() ? body.category.trim() : inferCategory(purpose);
   const requestedProductIds = Array.isArray(body?.requestedProductIds) && body.requestedProductIds.every((value) => typeof value === "string")
@@ -78,28 +103,19 @@ export async function POST(request: Request) {
   });
 
   const ranked = rankCandidates(candidateProducts, maxSpendPaise);
-  const offers = [];
+  const offers: MerchantOffer[] = [];
   for (const { product } of ranked) {
     let quote;
-    try {
-      quote = buildQuote(product, 1);
-    } catch {
-      continue;
-    }
+    try { quote = buildQuote(product, 1); } catch { continue; }
     if (quote.totalPaise > maxSpendPaise) continue;
     offers.push({
       offerId: `offer_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
       intentId,
       merchantId: MERCHANT_ID,
       items: quote.lineItems,
-      amount: { currency: "INR" as const, amountPaise: quote.totalPaise },
+      amount: { currency: "INR", amountPaise: quote.totalPaise },
       quoteId: quote.quoteId,
-      conditions: {
-        fulfillment: "standard",
-        priceLockedMinutes: 5,
-        inventoryAvailable: product.inventory,
-        offerType: "single_item",
-      },
+      conditions: { fulfillment: "standard", priceLockedMinutes: 5, inventoryAvailable: product.inventory, offerType: "single_item" },
       sourceProtocol,
       createdAt: new Date().toISOString(),
       expiresAt: quote.expiresAt,
@@ -107,48 +123,42 @@ export async function POST(request: Request) {
     if (offers.length >= 3) break;
   }
 
+  if (!offers.length) return Response.json({ error: "MERCHANT_AGENT_NO_ELIGIBLE_OFFER" }, { status: 422, headers: corsHeaders });
+
+  const negotiationId = `neg_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
   const createdAt = new Date().toISOString();
-  const expiresAt = offers[0]?.expiresAt ?? new Date(Date.now() + 60_000).toISOString();
-  return Response.json(
+  const expiresAt = offers.reduce((earliest, offer) => offer.expiresAt < earliest ? offer.expiresAt : earliest, offers[0]!.expiresAt);
+  const turns = [
     {
-      negotiationId: `neg_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`,
-      intent: {
-        intentId,
-        buyer: {
-          agentId: buyerAgentId || "buyer-agent:mandate-demo",
-          agentType: "buyer",
-          name: "MANDATE Buyer Agent",
-        },
-        merchantId: MERCHANT_ID,
-        purpose,
-        items: offers[0]?.items.map((item) => ({ productId: item.productId, quantity: item.quantity })) ?? [],
-        maxSpend: { currency: "INR", amountPaise: maxSpendPaise },
-        currency: "INR",
-        constraints: { category: category ?? null },
-        sourceProtocol,
-        createdAt,
-        expiresAt,
-      },
-      merchant: merchantAgent,
-      offers,
-      turns: [
-        {
-          turnId: `turn_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
-          actor: "buyer_agent",
-          type: "intent",
-          message: `${buyerAgentId || "buyer-agent:mandate-demo"} asks the merchant agent to satisfy: ${purpose} within ₹${(maxSpendPaise / 100).toFixed(2)}.`,
-          createdAt,
-        },
-        ...offers.map((offer) => ({
-          turnId: `turn_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
-          actor: "merchant_agent" as const,
-          type: "offer" as const,
-          offerId: offer.offerId,
-          message: `Merchant agent offers ${offer.items.map((item) => item.productId).join(", ")} at ₹${(offer.amount.amountPaise / 100).toFixed(2)} using quote ${offer.quoteId}.`,
-          createdAt,
-        })),
-      ],
+      turnId: `turn_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
+      actor: "buyer_agent" as const,
+      type: "intent" as const,
+      message: `${buyerAgentId || "buyer-agent:mandate-demo"} asks the merchant agent to satisfy: ${purpose} within ₹${(maxSpendPaise / 100).toFixed(2)}.`,
+      createdAt,
     },
-    { headers: { ...corsHeaders, "cache-control": "no-store" } },
-  );
+    ...offers.map((offer) => ({
+      turnId: `turn_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
+      actor: "merchant_agent" as const,
+      type: "offer" as const,
+      offerId: offer.offerId,
+      message: `Merchant agent offers ${offer.items.map((item) => item.productId).join(", ")} at ₹${(offer.amount.amountPaise / 100).toFixed(2)} using quote ${offer.quoteId}.`,
+      createdAt: new Date().toISOString(),
+    })),
+  ];
+
+  const intent = {
+    intentId,
+    buyer: { agentId: buyerAgentId || "buyer-agent:mandate-demo", agentType: "buyer", name: "MANDATE Buyer Agent" },
+    merchantId: MERCHANT_ID,
+    purpose,
+    items: offers[0]!.items.map((item) => ({ productId: item.productId, quantity: item.quantity })),
+    maxSpend: { currency: "INR" as const, amountPaise: maxSpendPaise },
+    currency: "INR" as const,
+    constraints: { category: category ?? null },
+    sourceProtocol,
+    createdAt,
+    expiresAt,
+  };
+  negotiations.set(negotiationId, { negotiationId, intent, merchant: merchantAgent, offers, turns, createdAt, expiresAt });
+  return Response.json({ negotiationId, intent, merchant: merchantAgent, offers, turns }, { headers: { ...corsHeaders, "cache-control": "no-store" } });
 }
