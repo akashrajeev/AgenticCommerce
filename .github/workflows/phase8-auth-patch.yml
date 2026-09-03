@@ -1,0 +1,95 @@
+name: One-shot Phase 8 auth route patch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: contains(github.event.head_commit.message, 'stage tenant auth route migration')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply tenant scoped mandate boundary
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          dm = Path('apps/gateway/src/delegated-mandates.ts')
+          s = dm.read_text()
+          old = 'export function listDelegatedMandates(): DelegatedMandate[] {\n  return [...mandates.values()].map(updateStatus).sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));\n}'
+          new = 'export function listDelegatedMandates(subjectId?: string): DelegatedMandate[] {\n  return [...mandates.values()]\n    .filter((mandate) => !subjectId || mandate.subjectId === subjectId)\n    .map(updateStatus)\n    .sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));\n}'
+          if old not in s:
+              raise SystemExit('delegated mandate list function not found')
+          dm.write_text(s.replace(old, new, 1))
+
+          server = Path('apps/gateway/src/server.ts')
+          s = server.read_text()
+          s = s.replace('  createDelegatedMandate,\n', '  createDelegatedMandate,\n  getDelegatedMandate,\n', 1)
+          anchor = 'import { attachRazorpayOrder, getTransaction, hydrateTransactionStore } from "./transaction-core.js";\n'
+          if anchor not in s:
+              raise SystemExit('server transaction import anchor not found')
+          s = s.replace(anchor, anchor + 'import { requireTenantPrincipal, type TenantPrincipal } from "./tenant-auth.js";\n', 1)
+
+          helper_anchor = 'function parseCheckoutBinding(body: unknown) {'
+          helper = '''function tenantPrincipal(request: import("express").Request): TenantPrincipal | null {\n  return requireTenantPrincipal(request.header("authorization") ?? undefined);\n}\n\nfunction enforceMandateOwnership(mandateId: string, principal: TenantPrincipal | null): void {\n  if (!principal) return;\n  const mandate = getDelegatedMandate(mandateId);\n  if (!mandate) throw new Error("DELEGATED_MANDATE_NOT_FOUND");\n  if (mandate.subjectId !== principal.subjectId) throw new Error("DELEGATED_MANDATE_FORBIDDEN");\n}\n\nfunction internalSecretOrThrow(request: import("express").Request, error = "UNAUTHORIZED_INTERNAL_REQUEST"): void {\n  const provided = request.header("x-mandate-gateway-secret") ?? "";\n  if (!provided || provided !== config.internalGatewaySecret) throw new Error(error);\n}\n\n'''
+          if helper_anchor not in s:
+              raise SystemExit('checkout binding anchor not found')
+          s = s.replace(helper_anchor, helper + helper_anchor, 1)
+
+          old_create = '''app.post("/v1/delegated-mandates", async (request, response) => {\n  try {\n    const mandate = await createDelegatedMandate(parseDelegatedMandateCreate(request.body));\n    return response.status(201).json({ mandate, remainingPaise: mandate.totalBudget.amountPaise });\n  } catch (error) {\n    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_CREATE_FAILED";\n    return response.status(message.startsWith("INVALID_") || message.includes("EXCEEDS") ? 400 : 422).json({ error: message });\n  }\n});'''
+          new_create = '''app.post("/v1/delegated-mandates", async (request, response) => {\n  try {\n    const principal = tenantPrincipal(request);\n    const parsed = parseDelegatedMandateCreate(request.body);\n    if (principal && parsed.subjectId && parsed.subjectId !== principal.subjectId) return response.status(403).json({ error: "DELEGATED_MANDATE_SUBJECT_MISMATCH" });\n    const mandate = await createDelegatedMandate({ ...parsed, ...(principal ? { subjectId: principal.subjectId } : {}) });\n    return response.status(201).json({ mandate, remainingPaise: mandate.totalBudget.amountPaise, tenantId: principal?.tenantId });\n  } catch (error) {\n    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_CREATE_FAILED";\n    const status = message.includes("SUBJECT_MISMATCH") || message.includes("FORBIDDEN") ? 403 : message === "TENANT_AUTH_REQUIRED" || message === "INVALID_TENANT_AUTH" ? 401 : message === "TENANT_AUTH_NOT_CONFIGURED" ? 503 : message.startsWith("INVALID_") || message.includes("EXCEEDS") ? 400 : 422;\n    return response.status(status).json({ error: message });\n  }\n});'''
+          if old_create not in s:
+              raise SystemExit('delegated mandate create route not found')
+          s = s.replace(old_create, new_create, 1)
+
+          old_list = 'app.get("/v1/delegated-mandates", (_request, response) => response.json({ mandates: listDelegatedMandates().map((mandate) => delegatedMandateStats(mandate.mandateId)) }));'
+          new_list = '''app.get("/v1/delegated-mandates", (request, response) => {\n  try {\n    const principal = tenantPrincipal(request);\n    return response.json({ tenantId: principal?.tenantId, mandates: listDelegatedMandates(principal?.subjectId).map((mandate) => delegatedMandateStats(mandate.mandateId)) });\n  } catch (error) {\n    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_LIST_FAILED";\n    const status = message === "TENANT_AUTH_NOT_CONFIGURED" ? 503 : 401;\n    return response.status(status).json({ error: message });\n  }\n});'''
+          if old_list not in s:
+              raise SystemExit('delegated mandate list route not found')
+          s = s.replace(old_list, new_list, 1)
+
+          old_get = '''app.get("/v1/delegated-mandates/:mandateId", (request, response) => {\n  const mandate = delegatedMandateStats(request.params.mandateId);\n  if (!mandate) return response.status(404).json({ error: "DELEGATED_MANDATE_NOT_FOUND" });\n  return response.json({ mandate });\n});'''
+          new_get = '''app.get("/v1/delegated-mandates/:mandateId", (request, response) => {\n  try {\n    const principal = tenantPrincipal(request);\n    enforceMandateOwnership(request.params.mandateId, principal);\n    const mandate = delegatedMandateStats(request.params.mandateId);\n    if (!mandate) return response.status(404).json({ error: "DELEGATED_MANDATE_NOT_FOUND" });\n    return response.json({ mandate });\n  } catch (error) {\n    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_GET_FAILED";\n    const status = message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : message === "DELEGATED_MANDATE_FORBIDDEN" ? 403 : message === "TENANT_AUTH_NOT_CONFIGURED" ? 503 : 401;\n    return response.status(status).json({ error: message });\n  }\n});'''
+          if old_get not in s:
+              raise SystemExit('delegated mandate get route not found')
+          s = s.replace(old_get, new_get, 1)
+
+          old_revoke = '''app.post("/v1/delegated-mandates/:mandateId/revoke", async (request, response) => {\n  try { return response.json({ mandate: await revokeDelegatedMandate(request.params.mandateId) }); }\n  catch (error) { const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_REVOKE_FAILED"; return response.status(message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : 409).json({ error: message }); }\n});'''
+          new_revoke = '''app.post("/v1/delegated-mandates/:mandateId/revoke", async (request, response) => {\n  try {\n    const principal = tenantPrincipal(request);\n    enforceMandateOwnership(request.params.mandateId, principal);\n    return response.json({ mandate: await revokeDelegatedMandate(request.params.mandateId) });\n  } catch (error) {\n    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_REVOKE_FAILED";\n    const status = message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : message === "DELEGATED_MANDATE_FORBIDDEN" ? 403 : message === "TENANT_AUTH_NOT_CONFIGURED" ? 503 : message === "TENANT_AUTH_REQUIRED" || message === "INVALID_TENANT_AUTH" ? 401 : 409;\n    return response.status(status).json({ error: message });\n  }\n});'''
+          if old_revoke not in s:
+              raise SystemExit('delegated mandate revoke route not found')
+          s = s.replace(old_revoke, new_revoke, 1)
+
+          old_execute = '''app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) => {\n  try {\n    const checkout = parseCheckoutBinding(request.body?.checkout ?? request.body);'''
+          new_execute = '''app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) => {\n  try {\n    const principal = tenantPrincipal(request);\n    enforceMandateOwnership(request.params.mandateId, principal);\n    const checkout = parseCheckoutBinding(request.body?.checkout ?? request.body);'''
+          if old_execute not in s:
+              raise SystemExit('delegated mandate execute route not found')
+          s = s.replace(old_execute, new_execute, 1)
+
+          old_neg = '''app.post("/v1/negotiations/:negotiationId/accept", async (request, response) => {\n  try {\n    const mandateId = typeof request.body?.mandateId === "string" ? request.body.mandateId.trim() : "";'''
+          new_neg = '''app.post("/v1/negotiations/:negotiationId/accept", async (request, response) => {\n  try {\n    const principal = tenantPrincipal(request);\n    const mandateId = typeof request.body?.mandateId === "string" ? request.body.mandateId.trim() : "";\n    if (mandateId) enforceMandateOwnership(mandateId, principal);'''
+          if old_neg not in s:
+              raise SystemExit('negotiation accept route not found')
+          s = s.replace(old_neg, new_neg, 1)
+
+          old_settle = '''app.post("/v1/delegated-mandates/settle/:transactionId", async (request, response) => {\n  try {'''
+          new_settle = '''app.post("/v1/delegated-mandates/settle/:transactionId", async (request, response) => {\n  try {\n    internalSecretOrThrow(request, "UNAUTHORIZED_DELEGATED_SETTLEMENT");'''
+          if old_settle not in s:
+              raise SystemExit('delegated settlement route not found')
+          s = s.replace(old_settle, new_settle, 1)
+
+          server.write_text(s)
+          marker = Path('.phase8-auth-trigger')
+          marker.unlink(missing_ok=True)
+          workflow = Path('.github/workflows/phase8-auth-patch.yml')
+          workflow.unlink(missing_ok=True)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+akashrajeev@users.noreply.github.com"
+          git add apps/gateway/src/server.ts apps/gateway/src/delegated-mandates.ts .phase8-auth-trigger .github/workflows/phase8-auth-patch.yml
+          git commit -m "feat: enforce tenant ownership on mandate management"
+          git push origin HEAD:main
