@@ -71,7 +71,7 @@ test("calls facilitator verify and settle with the x402 v2 envelope", async () =
     seen.push(url);
     const requestBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
     assert.equal(requestBody.x402Version, 2);
-    assert.equal(requestBody.paymentRequirements, requirements);
+    assert.deepEqual(requestBody.paymentRequirements, requirements);
     if (url.endsWith("/verify")) return new Response(JSON.stringify({ isValid: true, payer: "0xpayer" }), { status: 200, headers: { "content-type": "application/json" } });
     return new Response(JSON.stringify({ success: true, transaction: "0xtx", network: requirements.network, payer: "0xpayer", amount: requirements.amount }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
