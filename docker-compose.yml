@@ -11,6 +11,7 @@ services:
       - "5432:5432"
     volumes:
       - mandate-postgres-data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mandate -d mandate"]
       interval: 5s
@@ -28,6 +29,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
+      DATABASE_URL: postgresql://mandate:mandate@postgres:5432/mandate
       MERCHANT_APP_ORIGIN: http://localhost:3000
       MERCHANT_INTERNAL_URL: http://merchant:3000
       BUYER_APP_ORIGIN: http://localhost:3001
@@ -36,6 +38,8 @@ services:
     ports:
       - "4000:4000"
     depends_on:
+      postgres:
+        condition: service_healthy
       merchant:
         condition: service_started
     healthcheck:
