@@ -2,10 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 
+process.env.RAZORPAY_KEY_ID = "rzp_test_unit";
 process.env.RAZORPAY_KEY_SECRET = "unit-test-key-secret";
 process.env.RAZORPAY_WEBHOOK_SECRET = "unit-test-webhook-secret";
 
-const { verifyCheckoutSignature, verifyWebhookSignature } = await import("./razorpay.js");
+const { isRazorpayTestMode, verifyCheckoutSignature, verifyWebhookSignature } = await import("./razorpay.js");
+
+test("Razorpay runtime is explicitly configured for Test Mode", () => {
+  assert.equal(isRazorpayTestMode(), true);
+});
 
 test("checkout signature accepts a correctly signed order/payment pair", () => {
   const orderId = "order_test";
