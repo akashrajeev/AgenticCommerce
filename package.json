@@ -5,10 +5,10 @@
   "description": "MANDATE agentic commerce platform monorepo.",
   "scripts": {
     "dev": "npm run dev --workspaces --if-present",
-    "build": "npm run build -w @mandate/types && npm run build -w @mandate/shared && npm run build -w @mandate/schemas && npm run build -w @mandate/gateway && npm run build -w @mandate/merchant && npm run build -w @mandate/buyer",
+    "build": "npm run build -w @mandate/types && npm run build -w @mandate/shared && npm run build -w @mandate/schemas && npm run build -w @mandate/gateway && npm run build -w @mandate/merchant && npm run build -w @mandate/buyer && npm run build -w @mandate/service",
     "lint": "eslint .",
-    "typecheck": "npm run build -w @mandate/types && npm run build -w @mandate/shared && npm run build -w @mandate/schemas && npm run typecheck -w @mandate/gateway && npm run typecheck -w @mandate/merchant && npm run typecheck -w @mandate/buyer",
-    "test": "npm run test -w @mandate/gateway",
+    "typecheck": "npm run build -w @mandate/types && npm run build -w @mandate/shared && npm run build -w @mandate/schemas && npm run typecheck -w @mandate/gateway && npm run typecheck -w @mandate/merchant && npm run typecheck -w @mandate/buyer && npm run typecheck -w @mandate/service",
+    "test": "npm run test -w @mandate/gateway && npm run test -w @mandate/service",
     "format": "prettier . --write",
     "format:check": "prettier . --check"
   },
