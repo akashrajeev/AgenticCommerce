@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
-import type { CheckoutLineItem, DelegatedMandate, MoneyAmount } from "@mandate/types";
+import type { CheckoutLineItem, DelegatedMandate, MerchantOffer, MoneyAmount } from "@mandate/types";
+import { merchantOfferSchema } from "@mandate/schemas";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { createApp } from "./app.js";
 import { authorizeSignedCheckout } from "./mandate-authorization.js";
 import { config } from "./config.js";
+import { acceptNegotiatedOffer } from "./negotiation.js";
 import {
   createDelegatedMandate,
   delegatedMandateStats,
@@ -132,8 +134,7 @@ app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) 
         paymentOrder = { order, transaction: updated, checkout: getPublicConfig() };
         result.authorization.transaction = updated;
       } catch (error) {
-        const { settleDelegatedExecution: _settle } = await import("./delegated-mandates.js");
-        await _settle(result.authorization.transaction.id, "released");
+        await settleDelegatedExecution(result.authorization.transaction.id, "released");
         throw error;
       }
     }
@@ -142,6 +143,23 @@ app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) 
     const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_EXECUTION_FAILED";
     const status = message.includes("NOT_FOUND") ? 404 : message.includes("REMAINING_BUDGET") || message.includes("LIMIT") || message.includes("NOT_ALLOWED") || message.includes("EXPIRED") || message.includes("REVOKED") || message.includes("EXHAUSTED") ? 409 : message.includes("POLICY_BLOCKED") ? 422 : message.includes("RAZORPAY") ? 503 : 400;
     return response.status(status).json({ error: message, mode: "delegated_autonomous" });
+  }
+});
+
+app.post("/v1/negotiations/:negotiationId/accept", async (request, response) => {
+  try {
+    const mandateId = typeof request.body?.mandateId === "string" ? request.body.mandateId.trim() : "";
+    const parsed = merchantOfferSchema.safeParse(request.body?.offer);
+    if (!mandateId) return response.status(400).json({ error: "NEGOTIATION_MANDATE_REQUIRED" });
+    if (!parsed.success) return response.status(400).json({ error: "INVALID_NEGOTIATED_OFFER", details: parsed.error.flatten() });
+    const result = await acceptNegotiatedOffer({ negotiationId: request.params.negotiationId, mandateId, offer: parsed.data });
+    const transaction = getTransaction(result.transactionId);
+    if (!transaction) return response.status(500).json({ error: "NEGOTIATION_TRANSACTION_NOT_FOUND" });
+    return response.status(result.replayed ? 200 : 201).json({ mode: "negotiated_offer", replayed: result.replayed, offer: result.offer ?? parsed.data, transaction, authorizationId: result.authorizationId, executionId: result.executionId, mandate: result.mandate });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "NEGOTIATION_ACCEPT_FAILED";
+    const status = message.includes("NOT_FOUND") ? 404 : message.includes("EXPIRED") || message.includes("MISMATCH") || message.includes("UNSUPPORTED") || message.includes("INVALID") ? 400 : message.includes("LIMIT") || message.includes("NOT_ALLOWED") || message.includes("REVOKED") || message.includes("EXHAUSTED") || message.includes("REMAINING_BUDGET") ? 409 : message.includes("POLICY_BLOCKED") ? 422 : 502;
+    return response.status(status).json({ error: message, mode: "negotiated_offer" });
   }
 });
 
