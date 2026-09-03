@@ -23,28 +23,40 @@ const time = (value: string) => new Date(value).toLocaleTimeString("en-IN", { ho
 export default function UnifiedProofPage() {
   const [proof, setProof] = useState<Proof | null>(null);
   const [loading, setLoading] = useState(true);
+  const [live, setLive] = useState(false);
   const [error, setError] = useState("");
 
-  async function refresh() {
-    setLoading(true); setError("");
+  async function loadProof(showLoading: boolean) {
+    if (showLoading) setLoading(true);
+    setError("");
     try {
       const response = await fetch("/api/proof", { cache: "no-store" });
       const body = await response.json() as Proof & { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Unable to load proof.");
       setProof(body);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to load proof.");
-    } finally { setLoading(false); }
+      if (showLoading) setError(caught instanceof Error ? caught.message : "Unable to load proof.");
+    } finally {
+      if (showLoading) setLoading(false);
+    }
   }
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    void loadProof(true);
+    const timer = window.setInterval(() => void loadProof(false), 2500);
+    setLive(true);
+    return () => {
+      window.clearInterval(timer);
+      setLive(false);
+    };
+  }, []);
 
   const tx = proof?.transaction ?? null;
   const summary = proof?.summary;
   const upliftPercent = summary && summary.baseAmountPaise > 0 ? ((summary.incrementalRevenuePaise / summary.baseAmountPaise) * 100).toFixed(1) : "0.0";
 
   return <main style={{ minHeight: "100vh", background: "#f7f7f3", color: "#171717", fontFamily: "Arial, sans-serif", padding: "34px 20px 72px" }}><div style={{ maxWidth: 1120, margin: "0 auto" }}>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 20, marginBottom: 28 }}><Link href="/labs" style={{ color: "#666", textDecoration: "none", fontSize: 13 }}>← Judge labs</Link><button onClick={() => void refresh()} disabled={loading} style={{ background: "white", border: "1px solid #cfcfc9", padding: "9px 12px", fontWeight: 700 }}>{loading ? "Refreshing…" : "Refresh live proof"}</button></div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 20, marginBottom: 28 }}><Link href="/labs" style={{ color: "#666", textDecoration: "none", fontSize: 13 }}>← Judge labs</Link><div style={{ display: "flex", alignItems: "center", gap: 12 }}><span style={{ fontSize: 10, color: live ? "#1e5b3e" : "#777", letterSpacing: ".08em", fontWeight: 700 }}>{live ? "LIVE · AUTO-REFRESH 2.5s" : "LIVE"}</span><button onClick={() => void loadProof(true)} disabled={loading} style={{ background: "white", border: "1px solid #cfcfc9", padding: "9px 12px", fontWeight: 700 }}>{loading ? "Refreshing…" : "Refresh live proof"}</button></div></div>
     <div style={{ borderTop: "2px solid #171717", paddingTop: 18 }}><div style={{ fontSize: 11, letterSpacing: ".12em", fontWeight: 700, color: "#777" }}>MANDATE / UNIFIED TRANSACTION PROOF</div><h1 style={{ fontSize: 52, lineHeight: 1.02, letterSpacing: "-.05em", margin: "10px 0 14px", maxWidth: 900 }}>One transaction. One auditable chain.</h1><p style={{ maxWidth: 780, color: "#666", lineHeight: 1.7, margin: 0 }}>This screen joins buyer intent, deterministic policy, Razorpay references, webhook evidence and realized merchant revenue for the latest meaningful transaction.</p></div>
 
     {error ? <div style={{ marginTop: 20, padding: 16, background: "#f6e9e7", border: "1px solid #dfc1bc", color: "#7b302b" }}>{error}</div> : null}
