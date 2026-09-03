@@ -63,6 +63,17 @@ model NegotiationSession {
   @@map("negotiation_sessions")
 }
 
+model NegotiationAcceptanceClaim {
+  key           String   @id
+  negotiationId String   @map("negotiation_id")
+  mandateId     String   @map("mandate_id")
+  offerId       String   @map("offer_id")
+  createdAt     DateTime @map("created_at")
+
+  @@index([createdAt])
+  @@map("negotiation_acceptance_claims")
+}
+
 model NegotiationAcceptance {
   key             String   @id
   negotiationId   String   @map("negotiation_id")
