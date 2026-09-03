@@ -31,6 +31,8 @@ type RouterBody = {
   routes: Record<string, RoutePlan>;
 };
 
+type ProbeResult = { ok: boolean; status: number; detail: string };
+
 const targets = [
   ["merchant-checkout", "Merchant checkout", "Agent buys a merchant product"],
   ["agent-service", "Paid agent service", "Agent pays an HTTP-native service"],
@@ -50,6 +52,7 @@ export default function ProtocolsPage() {
   const [data, setData] = useState<RouterBody | null>(null);
   const [target, setTarget] = useState("merchant-checkout");
   const [result, setResult] = useState<RoutePlan | null>(null);
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Loading protocol control plane…");
 
@@ -64,14 +67,16 @@ export default function ProtocolsPage() {
 
   useEffect(() => { void load().catch((error) => setMessage(error instanceof Error ? error.message : "Unable to load protocol matrix.")); }, []);
 
-  async function resolve() {
+  async function resolve(runProbe = false) {
     setBusy(true);
+    setProbe(null);
     try {
-      const response = await fetch("/api/protocol-router", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target }) });
-      const body = await response.json() as { selected?: RoutePlan; error?: string; referenceProtocol?: Protocol };
+      const response = await fetch("/api/protocol-router", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target, probe: runProbe }) });
+      const body = await response.json() as { selected?: RoutePlan; error?: string; trace?: ProbeResult };
       if (!response.ok || !body.selected) throw new Error(body.error ?? "Route unavailable");
       setResult(body.selected);
-      setMessage(`${body.selected.name} selected for ${target}. MANDATE remains the authority boundary.`);
+      setProbe(body.trace ?? null);
+      setMessage(runProbe ? `${body.selected.name} selected and live-probed for ${target}.` : `${body.selected.name} selected for ${target}. MANDATE remains the authority boundary.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Route unavailable");
     } finally {
@@ -120,10 +125,14 @@ export default function ProtocolsPage() {
           <div className={styles.panelHead}><div><span className={styles.kicker}>ROUTE AN AGENT REQUEST</span><h2>Resolver</h2></div></div>
           <p className={styles.note}>The resolver only selects executable protocols. Research/alignment targets stay visible but cannot silently become payment authority.</p>
           <div className={styles.targets}>
-            {targets.map(([id, label, description]) => <button key={id} className={id === target ? styles.targetActive : ""} onClick={() => setTarget(id)}><div><strong>{label}</strong><small>{description}</small></div><span>→</span></button>)}
+            {targets.map(([id, label, description]) => <button key={id} className={id === target ? styles.targetActive : ""} onClick={() => { setTarget(id); setProbe(null); }}><div><strong>{label}</strong><small>{description}</small></div><span>→</span></button>)}
           </div>
-          <button className={styles.resolve} disabled={busy} onClick={() => void resolve()}>{busy ? "Resolving…" : "Resolve protocol"}<span>→</span></button>
+          <div className={styles.actionRow}>
+            <button className={styles.resolve} disabled={busy} onClick={() => void resolve(false)}>{busy ? "Resolving…" : "Resolve protocol"}<span>→</span></button>
+            <button className={styles.probeButton} disabled={busy} onClick={() => void resolve(true)}>Probe live path</button>
+          </div>
           {result && <div className={styles.result}><span>SELECTED ADAPTER</span><strong>{result.name}</strong><small>{result.transport}</small><small>authority → {result.authority}</small><b>{result.demoEnabled ? "EXECUTABLE IN DEMO" : "NOT EXECUTABLE"}</b></div>}
+          {probe && <div className={styles.trace}><span>LIVE TRACE</span><strong>{probe.status === 402 ? "402 PAYMENT REQUIRED" : probe.status === 200 ? "200 OK" : `HTTP ${probe.status}`}</strong><small>{probe.detail}</small></div>}
           <div className={styles.message}>{message}</div>
         </aside>
       </section>
