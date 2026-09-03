@@ -8,6 +8,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "prisma generate --config ../../prisma.config.ts && tsc -p tsconfig.json",
     "start": "node dist/server.js",
+    "start:mcp": "node dist/mcp-server.js",
+    "dev:mcp": "tsx watch src/mcp-server.ts",
     "typecheck": "prisma generate --config ../../prisma.config.ts && tsc -p tsconfig.json --noEmit",
     "test": "tsx --test src/*.test.ts",
     "prisma:generate": "prisma generate --config ../../prisma.config.ts",
