@@ -48,6 +48,30 @@ services:
       timeout: 5s
       retries: 10
 
+  mcp:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    container_name: mandate-mcp
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      MCP_PORT: 4100
+      MCP_AGENT_TOKEN: ${MCP_AGENT_TOKEN:-mandate-local-mcp}
+      MCP_GATEWAY_INTERNAL_URL: http://gateway:4000
+      INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:-mandate-local-gateway}
+      DATABASE_URL: postgresql://mandate:mandate@postgres:5432/mandate
+    ports:
+      - "4100:4100"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4100/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      
   merchant:
     build:
       context: .
