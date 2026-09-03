@@ -90,7 +90,7 @@ export default function ProtocolsPage() {
     <main className={styles.shell}>
       <header className={styles.header}>
         <div className={styles.brand}><span className={styles.mark}>M</span><div><strong>MANDATE</strong><small>Unified protocol control plane</small></div></div>
-        <nav><a href="/">Buyer</a><a href="/negotiation">Negotiation</a><a href="/delegated-mandates">Delegated authority</a><a href="/x402">x402</a></nav>
+        <nav className={styles.headerNav}><a href="/">Buyer</a><a href="/negotiation">Negotiation</a><a href="/delegated-mandates">Delegated authority</a><a href="/x402">x402</a></nav>
       </header>
 
       <section className={styles.hero}>
