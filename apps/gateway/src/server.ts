@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CheckoutLineItem, DelegatedMandate, MerchantOffer, MoneyAmount } from "@mandate/types";
+import type { CheckoutLineItem, MoneyAmount } from "@mandate/types";
 import { merchantOfferSchema } from "@mandate/schemas";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { createApp } from "./app.js";
@@ -106,22 +106,15 @@ app.post("/v1/delegated-mandates", async (request, response) => {
 });
 
 app.get("/v1/delegated-mandates", (_request, response) => response.json({ mandates: listDelegatedMandates().map((mandate) => delegatedMandateStats(mandate.mandateId)) }));
-
 app.get("/v1/delegated-mandates/:mandateId", (request, response) => {
   const mandate = delegatedMandateStats(request.params.mandateId);
   if (!mandate) return response.status(404).json({ error: "DELEGATED_MANDATE_NOT_FOUND" });
   return response.json({ mandate });
 });
-
 app.post("/v1/delegated-mandates/:mandateId/revoke", async (request, response) => {
-  try {
-    return response.json({ mandate: await revokeDelegatedMandate(request.params.mandateId) });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_REVOKE_FAILED";
-    return response.status(message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : 409).json({ error: message });
-  }
+  try { return response.json({ mandate: await revokeDelegatedMandate(request.params.mandateId) }); }
+  catch (error) { const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_REVOKE_FAILED"; return response.status(message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : 409).json({ error: message }); }
 });
-
 app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) => {
   try {
     const checkout = parseCheckoutBinding(request.body?.checkout ?? request.body);
@@ -145,7 +138,6 @@ app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) 
     return response.status(status).json({ error: message, mode: "delegated_autonomous" });
   }
 });
-
 app.post("/v1/negotiations/:negotiationId/accept", async (request, response) => {
   try {
     const mandateId = typeof request.body?.mandateId === "string" ? request.body.mandateId.trim() : "";
@@ -155,14 +147,13 @@ app.post("/v1/negotiations/:negotiationId/accept", async (request, response) => 
     const result = await acceptNegotiatedOffer({ negotiationId: request.params.negotiationId, mandateId, offer: parsed.data });
     const transaction = getTransaction(result.transactionId);
     if (!transaction) return response.status(500).json({ error: "NEGOTIATION_TRANSACTION_NOT_FOUND" });
-    return response.status(result.replayed ? 200 : 201).json({ mode: "negotiated_offer", replayed: result.replayed, offer: result.offer ?? parsed.data, transaction, authorizationId: result.authorizationId, executionId: result.executionId, mandate: result.mandate });
+    return response.status(result.replayed ? 200 : 201).json({ mode: "negotiated_offer", replayed: result.replayed, offer: result.offer, transaction, authorizationId: result.authorizationId, executionId: result.executionId, mandate: result.mandate });
   } catch (error) {
     const message = error instanceof Error ? error.message : "NEGOTIATION_ACCEPT_FAILED";
-    const status = message.includes("NOT_FOUND") ? 404 : message.includes("EXPIRED") || message.includes("MISMATCH") || message.includes("UNSUPPORTED") || message.includes("INVALID") ? 400 : message.includes("LIMIT") || message.includes("NOT_ALLOWED") || message.includes("REVOKED") || message.includes("EXHAUSTED") || message.includes("REMAINING_BUDGET") ? 409 : message.includes("POLICY_BLOCKED") ? 422 : 502;
+    const status = message === "NEGOTIATION_IDEMPOTENCY_CONFLICT" ? 409 : message.includes("NOT_FOUND") ? 404 : message.includes("EXPIRED") || message.includes("MISMATCH") || message.includes("UNSUPPORTED") || message.includes("INVALID") ? 400 : message.includes("LIMIT") || message.includes("NOT_ALLOWED") || message.includes("REVOKED") || message.includes("EXHAUSTED") || message.includes("REMAINING_BUDGET") ? 409 : message.includes("POLICY_BLOCKED") ? 422 : 502;
     return response.status(status).json({ error: message, mode: "negotiated_offer" });
   }
 });
-
 app.post("/v1/delegated-mandates/settle/:transactionId", async (request, response) => {
   try {
     const transaction = getTransaction(request.params.transactionId);
@@ -171,11 +162,8 @@ app.post("/v1/delegated-mandates/settle/:transactionId", async (request, respons
     if (!outcome) return response.status(409).json({ error: "TRANSACTION_NOT_SETTLEABLE", state: transaction.state });
     await settleDelegatedExecution(transaction.id, outcome);
     return response.json({ transaction, mandate: transaction.mandateAuthorization ? delegatedMandateStats(transaction.mandateAuthorization.mandateId) : undefined, outcome });
-  } catch (error) {
-    return response.status(422).json({ error: error instanceof Error ? error.message : "DELEGATED_MANDATE_SETTLEMENT_FAILED" });
-  }
+  } catch (error) { return response.status(422).json({ error: error instanceof Error ? error.message : "DELEGATED_MANDATE_SETTLEMENT_FAILED" }); }
 });
-
 app.post("/v1/mandates/:authorizationId/razorpay-order", async (request, response) => {
   const providedSecret = request.header("x-mandate-gateway-secret") ?? "";
   if (!providedSecret || providedSecret !== config.internalGatewaySecret) return response.status(401).json({ error: "UNAUTHORIZED_MANDATE_PAYMENT" });
@@ -200,10 +188,7 @@ app.post("/v1/mandates/:authorizationId/razorpay-order", async (request, respons
     const order = await createOrder(transaction);
     const updated = attachRazorpayOrder(transaction.id, order.id);
     return response.status(201).json({ transaction: updated, order, checkout: getPublicConfig(), mandateAuthorizationId: authorization.authorizationId });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "MANDATE_PAYMENT_BRIDGE_FAILED";
-    return response.status(message.includes("NOT_CONFIGURED") ? 503 : 422).json({ error: message });
-  }
+  } catch (error) { const message = error instanceof Error ? error.message : "MANDATE_PAYMENT_BRIDGE_FAILED"; return response.status(message.includes("NOT_CONFIGURED") ? 503 : 422).json({ error: message }); }
 });
 
 initializePersistence()
@@ -211,10 +196,5 @@ initializePersistence()
     hydrateTransactionStore(seed);
     return hydrateDelegatedMandatesFromPersistence();
   })
-  .then(() => {
-    app.listen(config.port, () => console.log(`MANDATE gateway listening on http://localhost:${config.port}`));
-  })
-  .catch((error) => {
-    console.error("MANDATE gateway startup failed", error);
-    process.exitCode = 1;
-  });
+  .then(() => app.listen(config.port, () => console.log(`MANDATE gateway listening on http://localhost:${config.port}`)))
+  .catch((error) => { console.error("MANDATE gateway startup failed", error); process.exitCode = 1; });
