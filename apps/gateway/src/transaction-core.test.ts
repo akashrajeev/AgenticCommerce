@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { CheckoutQuote, Product } from "@mandate/types";
-import { evaluatePolicy } from "./transaction-core.js";
+import { evaluatePolicy, proposeTransaction, recordPayment, recordPaymentVerified, confirmOrder, retryFailedTransaction, getTimeline } from "./transaction-core.js";
 
 type Snapshot = Parameters<typeof evaluatePolicy>[1];
 
@@ -47,6 +47,22 @@ function evaluate(product: Product, quote: CheckoutQuote, input: Partial<Paramet
     { merchantId: "mandate-market", productId: product.id, quantity: 1, maxSpendPaise: 500000, reason: "buy it", quoteId: quote.quoteId, ...input },
     { product, quote, inventory: product.inventory } satisfies Snapshot,
   );
+}
+
+async function withMerchantFetch(product: Product, quote: CheckoutQuote, fn: () => Promise<void>): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url: string | URL) => {
+    const path = String(url);
+    if (path.includes("/api/agent/products/")) return new Response(JSON.stringify({ product }), { status: 200, headers: { "content-type": "application/json" } });
+    if (path.includes("/api/agent/inventory/")) return new Response(JSON.stringify({ inventory: product.inventory }), { status: 200, headers: { "content-type": "application/json" } });
+    if (path.includes("/api/agent/checkout/quotes/")) return new Response(JSON.stringify({ quote }), { status: 200, headers: { "content-type": "application/json" } });
+    throw new Error(`Unexpected test fetch: ${path}`);
+  };
+  try {
+    await fn();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 test("policy allows an in-budget, in-stock transaction", () => {
@@ -129,4 +145,97 @@ test("policy blocks when the quote line item does not match the current product 
   const decision = evaluate(product, quote);
   assert.equal(decision.decision, "BLOCK");
   assert.equal(decision.checks.find((check) => check.rule === "AMOUNT_INTEGRITY")?.result, "FAIL");
+});
+
+test("late payment failure cannot regress a captured payment", async () => {
+  const product = makeProduct();
+  const quote = makeQuote(product, { quoteId: "quote_late_failure" });
+
+  await withMerchantFetch(product, quote, async () => {
+    const transaction = await proposeTransaction({
+      merchantId: "mandate-market",
+      productId: product.id,
+      quantity: 1,
+      maxSpendPaise: 500000,
+      reason: "test late failure",
+      quoteId: quote.quoteId,
+    });
+
+    assert.equal(transaction.state, "policy_authorized");
+    recordPayment(transaction.id, "pay_test_late", "authorized");
+    recordPayment(transaction.id, "pay_test_late", "captured");
+    assert.equal((await import("./transaction-core.js")).getTransaction(transaction.id)?.state, "payment_captured");
+
+    recordPayment(transaction.id, "pay_test_late", "failed");
+    assert.equal((await import("./transaction-core.js")).getTransaction(transaction.id)?.state, "payment_captured");
+    assert.ok(getTimeline(transaction.id).some((event) => event.action === "PAYMENT_FAILED_IGNORED"));
+  });
+});
+
+test("failed payment retry creates a distinct transaction and preserves the failed attempt", async () => {
+  const product = makeProduct();
+  const quote = makeQuote(product, { quoteId: "quote_retry" });
+
+  await withMerchantFetch(product, quote, async () => {
+    const failed = await proposeTransaction({
+      merchantId: "mandate-market",
+      productId: product.id,
+      quantity: 1,
+      maxSpendPaise: 500000,
+      reason: "test retry",
+      quoteId: quote.quoteId,
+    });
+
+    recordPayment(failed.id, "pay_test_failed", "failed");
+    assert.equal((await import("./transaction-core.js")).getTransaction(failed.id)?.state, "payment_failed");
+
+    const retry = await retryFailedTransaction(failed.id);
+    assert.notEqual(retry.id, failed.id);
+    assert.equal(retry.state, "policy_authorized");
+    assert.equal((await import("./transaction-core.js")).getTransaction(failed.id)?.state, "payment_failed");
+    assert.ok(getTimeline(failed.id).some((event) => event.action === "PAYMENT_RETRY_REQUESTED"));
+  });
+});
+
+test("payment retry is rejected unless the transaction is failed", async () => {
+  const product = makeProduct();
+  const quote = makeQuote(product, { quoteId: "quote_not_retryable" });
+
+  await withMerchantFetch(product, quote, async () => {
+    const transaction = await proposeTransaction({
+      merchantId: "mandate-market",
+      productId: product.id,
+      quantity: 1,
+      maxSpendPaise: 500000,
+      reason: "test invalid retry",
+      quoteId: quote.quoteId,
+    });
+
+    await assert.rejects(() => retryFailedTransaction(transaction.id), /TRANSACTION_NOT_RETRYABLE/);
+  });
+});
+
+test("verified payment can be confirmed and remains non-regressible", async () => {
+  const product = makeProduct();
+  const quote = makeQuote(product, { quoteId: "quote_confirm" });
+
+  await withMerchantFetch(product, quote, async () => {
+    const transaction = await proposeTransaction({
+      merchantId: "mandate-market",
+      productId: product.id,
+      quantity: 1,
+      maxSpendPaise: 500000,
+      reason: "test confirmation",
+      quoteId: quote.quoteId,
+    });
+
+    recordPayment(transaction.id, "pay_test_confirm", "authorized");
+    recordPayment(transaction.id, "pay_test_confirm", "captured");
+    recordPaymentVerified(transaction.id);
+    confirmOrder(transaction.id);
+    assert.equal((await import("./transaction-core.js")).getTransaction(transaction.id)?.state, "order_confirmed");
+
+    recordPayment(transaction.id, "pay_test_confirm", "failed");
+    assert.equal((await import("./transaction-core.js")).getTransaction(transaction.id)?.state, "order_confirmed");
+  });
 });
