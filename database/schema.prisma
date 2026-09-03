@@ -10,16 +10,17 @@ datasource db {
 }
 
 model Transaction {
-  id                String        @id
-  state             String
-  intent            Json
-  quote             Json
-  policy            Json?
-  razorpayOrderId   String?       @unique @map("razorpay_order_id")
-  razorpayPaymentId String?       @map("razorpay_payment_id")
-  createdAt         DateTime      @map("created_at")
-  updatedAt         DateTime      @map("updated_at")
-  auditEvents       AuditEvent[]
+  id                   String        @id
+  state                String
+  intent               Json
+  quote                Json
+  policy               Json?
+  mandateAuthorization Json?         @map("mandate_authorization")
+  razorpayOrderId      String?       @unique @map("razorpay_order_id")
+  razorpayPaymentId    String?       @map("razorpay_payment_id")
+  createdAt            DateTime      @map("created_at")
+  updatedAt            DateTime      @map("updated_at")
+  auditEvents          AuditEvent[]
 
   @@map("transactions")
 }
