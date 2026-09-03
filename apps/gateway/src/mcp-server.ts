@@ -10,26 +10,10 @@ const protocolVersions = new Set(["2025-06-18", "2025-11-25", "2026-07-28"]);
 const MODERN_PROTOCOL_VERSION = "2026-07-28";
 
 const tools = [
-  {
-    name: "mandate_razorpay_create_order",
-    description: "Create a Razorpay order only for an already authorized MANDATE transaction. Never provide an amount from the model; the gateway transaction remains authoritative.",
-    inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" } }, required: ["authorizationId", "transactionId"] },
-  },
-  {
-    name: "mandate_razorpay_fetch_order",
-    description: "Retrieve gateway-authoritative evidence for a Razorpay order after proving the order ID is bound to the supplied transaction.",
-    inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, orderId: { type: "string" } }, required: ["transactionId", "orderId"] },
-  },
-  {
-    name: "mandate_razorpay_fetch_payment",
-    description: "Retrieve gateway-authoritative evidence for a Razorpay payment after proving the payment ID is bound to the supplied transaction.",
-    inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["transactionId", "paymentId"] },
-  },
-  {
-    name: "mandate_razorpay_capture_payment",
-    description: "Capture a Razorpay payment through the existing gateway transaction boundary. A valid MANDATE authorization and matching transaction are mandatory.",
-    inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["authorizationId", "transactionId", "paymentId"] },
-  },
+  { name: "mandate_razorpay_create_order", description: "Create a Razorpay order only for an already authorized MANDATE transaction. Never provide an amount from the model; the gateway transaction remains authoritative.", inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" } }, required: ["authorizationId", "transactionId"] } },
+  { name: "mandate_razorpay_fetch_order", description: "Retrieve gateway-authoritative evidence for a Razorpay order after proving the order ID is bound to the supplied transaction.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, orderId: { type: "string" } }, required: ["transactionId", "orderId"] } },
+  { name: "mandate_razorpay_fetch_payment", description: "Retrieve gateway-authoritative evidence for a Razorpay payment after proving the payment ID is bound to the supplied transaction.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["transactionId", "paymentId"] } },
+  { name: "mandate_razorpay_capture_payment", description: "Capture a Razorpay payment through the existing gateway transaction boundary. A valid MANDATE authorization and matching transaction are mandatory.", inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["authorizationId", "transactionId", "paymentId"] } },
 ];
 
 function jsonRpc(id: unknown, result: unknown) { return { jsonrpc: "2.0", id, result }; }
@@ -41,7 +25,13 @@ function asArgs(value: unknown): Record<string, unknown> { if (!value || typeof 
 function requiredString(args: Record<string, unknown>, field: string): string { const value = args[field]; if (typeof value !== "string" || !value.trim()) throw new Error(`INVALID_${field.toUpperCase()}`); return value.trim(); }
 async function gateway(path: string, init: RequestInit = {}) { const headers = new Headers(init.headers); headers.set("content-type", "application/json"); headers.set("x-mandate-gateway-secret", config.internalGatewaySecret); return fetch(`${gatewayBaseUrl}${path}`, { ...init, headers, cache: "no-store" }); }
 async function gatewayJson(path: string, init?: RequestInit) { const response = await gateway(path, init); const body = await response.json().catch(() => null); if (!response.ok) { const error = body && typeof body === "object" && typeof (body as Record<string, unknown>).error === "string" ? String((body as Record<string, unknown>).error) : `GATEWAY_HTTP_${response.status}`; throw new Error(error); } return body; }
-function findTransaction(transactionsBody: unknown, transactionId: string): Record<string, unknown> { const transactions = transactionsBody && typeof transactionsBody === "object" && Array.isArray((transactionsBody as Record<string, unknown>).transactions) ? (transactionsBody as Record<string, unknown>).transactions : []; const transaction = transactions.find((item: unknown) => item && typeof item === "object" && (item as Record<string, unknown>).id === transactionId); if (!transaction || typeof transaction !== "object") throw new Error("TRANSACTION_NOT_FOUND"); return transaction as Record<string, unknown>; }
+function findTransaction(transactionsBody: unknown, transactionId: string): Record<string, unknown> {
+  const raw = transactionsBody && typeof transactionsBody === "object" ? (transactionsBody as Record<string, unknown>).transactions : undefined;
+  const transactions = Array.isArray(raw) ? raw : [];
+  const transaction = transactions.find((item: unknown) => item && typeof item === "object" && (item as Record<string, unknown>).id === transactionId);
+  if (!transaction || typeof transaction !== "object") throw new Error("TRANSACTION_NOT_FOUND");
+  return transaction as Record<string, unknown>;
+}
 function assertTransactionBinding(transaction: Record<string, unknown>, transactionId: string, authorizationId?: string): void { if (transaction.id !== transactionId) throw new Error("TRANSACTION_BINDING_MISMATCH"); if (authorizationId !== undefined) { const mandateAuthorization = transaction.mandateAuthorization; if (!mandateAuthorization || typeof mandateAuthorization !== "object") throw new Error("MANDATE_AUTHORIZATION_REQUIRED"); if ((mandateAuthorization as Record<string, unknown>).authorizationId !== authorizationId) throw new Error("MANDATE_AUTHORIZATION_MISMATCH"); if ((mandateAuthorization as Record<string, unknown>).status !== "authorized") throw new Error("MANDATE_AUTHORIZATION_NOT_ACTIVE"); } }
 async function transactionEvidence(transactionId: string, transaction: Record<string, unknown>) { const timeline = await gatewayJson(`/v1/transactions/${encodeURIComponent(transactionId)}/timeline`, { method: "GET" }); return { transactionId, state: transaction.state, razorpayOrderId: transaction.razorpayOrderId ?? null, razorpayPaymentId: transaction.razorpayPaymentId ?? null, amount: transaction.quote && typeof transaction.quote === "object" ? (transaction.quote as Record<string, unknown>).totalPaise : null, currency: transaction.quote && typeof transaction.quote === "object" ? (transaction.quote as Record<string, unknown>).currency : null, timeline }; }
 async function callTool(name: string, args: Record<string, unknown>) {
@@ -82,10 +72,7 @@ app.post("/mcp", async (request, response) => {
       if (protocolVersion === MODERN_PROTOCOL_VERSION) return response.json(jsonRpcError(id, -32601, "initialize is not supported in MCP 2026-07-28; use server/discover"));
       return response.json(jsonRpc(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.3.0" } }));
     }
-    if (message.method === "notifications/initialized") {
-      if (protocolVersion === MODERN_PROTOCOL_VERSION) return response.status(204).end();
-      return response.status(202).end();
-    }
+    if (message.method === "notifications/initialized") return protocolVersion === MODERN_PROTOCOL_VERSION ? response.status(204).end() : response.status(202).end();
     if (message.method === "ping") return response.json(jsonRpc(id, {}));
     if (message.method === "tools/list") return response.json(jsonRpc(id, { tools, ttlMs: 60_000, cacheScope: "private" }));
     if (message.method === "tools/call") { const params = message.params && typeof message.params === "object" ? message.params as Record<string, unknown> : {}; const name = typeof params.name === "string" ? params.name : ""; if (!name) return response.json(jsonRpcError(id, -32602, "Tool name is required")); const result = await callTool(name, asArgs(params.arguments ?? {})); return response.json(jsonRpc(id, { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result })); }
