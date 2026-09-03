@@ -1,162 +1,36 @@
 import Link from "next/link";
 import { catalog } from "../../lib/catalog";
 import { getRevenueRecommendations } from "../../lib/revenue";
-import { getRealizedRevenueAttribution, listMerchantOrders } from "../../lib/orders";
 
 export const dynamic = "force-dynamic";
-
-const formatINR = (paise: number) =>
-  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(paise / 100);
-
+const formatINR = (paise: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(paise / 100);
 type TransactionRow = Record<string, unknown>;
-
-async function getTransactions() {
-  const gateway = process.env.GATEWAY_INTERNAL_URL ?? "http://localhost:4000";
-  try {
-    const response = await fetch(`${gateway}/v1/transactions`, { cache: "no-store" });
-    if (!response.ok) return [] as TransactionRow[];
-    const body = (await response.json()) as { transactions: TransactionRow[] };
-    return body.transactions;
-  } catch {
-    return [] as TransactionRow[];
-  }
-}
-
+type PersistedOrder = { merchantOrderId: string; transactionId: string; amountPaise: number; baseAmountPaise: number; incrementalRevenuePaise: number; createdAt: string };
+type RevenueSnapshot = { confirmedOrders: number; realizedIncrementalRevenuePaise: number; upliftedOrders: number };
+async function getTransactions() { const gateway = process.env.GATEWAY_INTERNAL_URL ?? "http://localhost:4000"; try { const response = await fetch(`${gateway}/v1/transactions`, { cache: "no-store" }); if (!response.ok) return [] as TransactionRow[]; const body = (await response.json()) as { transactions: TransactionRow[] }; return body.transactions; } catch { return [] as TransactionRow[]; } }
+async function getPersistedOrders(): Promise<{ orders: PersistedOrder[]; revenue: RevenueSnapshot }> { const gateway = process.env.GATEWAY_INTERNAL_URL ?? "http://localhost:4000"; try { const response = await fetch(`${gateway}/v1/merchant/orders`, { cache: "no-store" }); if (!response.ok) return { orders: [], revenue: { confirmedOrders: 0, realizedIncrementalRevenuePaise: 0, upliftedOrders: 0 } }; const body = (await response.json()) as { orders?: PersistedOrder[]; revenue?: RevenueSnapshot }; return { orders: body.orders ?? [], revenue: body.revenue ?? { confirmedOrders: 0, realizedIncrementalRevenuePaise: 0, upliftedOrders: 0 } }; } catch { return { orders: [], revenue: { confirmedOrders: 0, realizedIncrementalRevenuePaise: 0, upliftedOrders: 0 } }; } }
 export default async function OperationsPage() {
-  const transactions = await getTransactions();
+  const [transactions, persisted] = await Promise.all([getTransactions(), getPersistedOrders()]);
+  const { orders: merchantOrders, revenue } = persisted;
   const blocks = transactions.filter((txn) => (txn.policy as { decision?: string } | undefined)?.decision === "BLOCK").length;
   const razorpayOrders = transactions.filter((txn) => Boolean(txn.razorpayOrderId)).length;
   const confirmed = transactions.filter((txn) => txn.state === "order_confirmed").length;
   const capturedVolume = transactions.reduce((sum, txn) => sum + (txn.state === "order_confirmed" && typeof (txn.quote as { totalPaise?: unknown } | undefined)?.totalPaise === "number" ? Number((txn.quote as { totalPaise: number }).totalPaise) : 0), 0);
   const failedAttempts = transactions.filter((txn) => txn.state === "payment_failed").length;
-  const merchantOrders = listMerchantOrders();
-  const realized = getRealizedRevenueAttribution();
-
   const opportunityMap = new Map<string, ReturnType<typeof getRevenueRecommendations>[number]>();
-  for (const product of catalog) {
-    for (const recommendation of getRevenueRecommendations(product.id)) {
-      const existing = opportunityMap.get(recommendation.productId);
-      if (!existing || recommendation.score > existing.score) opportunityMap.set(recommendation.productId, recommendation);
-    }
-  }
-  const opportunities = [...opportunityMap.values()].sort((a, b) => b.score - a.score).slice(0, 4);
-  const potentialLift = opportunities.reduce((sum, item) => sum + item.incrementalRevenuePaise, 0);
-  const latestPayments = transactions.filter((txn) => Boolean(txn.razorpayPaymentId)).slice(0, 4);
-  const latestOrders = merchantOrders.slice(0, 4);
-
-  return (
-    <main className="ops-page">
-      <header className="ops-header">
-        <Link href="/" className="brand"><span className="brand-mark">M</span><span>Mandate Market</span></Link>
-        <div className="ops-nav"><span>Operations</span><Link href="/">Storefront</Link><span className="mode-pill">Razorpay Test Mode</span></div>
-      </header>
-
-      <div className="ops-container">
-        <div className="ops-title-row">
-          <div><p className="eyebrow">Merchant operations</p><h1>Transactions</h1><p className="ops-copy">A live view of purchases proposed by agents and authorized through MANDATE.</p></div>
-          <div className="ops-system"><span className="status-dot" /> Gateway online</div>
-        </div>
-
-        <section className="metrics-grid">
-          <div><span>Transactions observed</span><strong>{transactions.length}</strong><small>Current gateway state</small></div>
-          <div><span>Policy blocks</span><strong>{blocks}</strong><small>Stopped before Razorpay</small></div>
-          <div><span>Razorpay orders</span><strong>{razorpayOrders}</strong><small>Test Mode orders created</small></div>
-          <div><span>Merchant confirmations</span><strong>{confirmed}</strong><small>Verified payment path</small></div>
-        </section>
-
-        <section className="ops-bottom-grid">
-          <div className="ops-card">
-            <p className="eyebrow">Payment rail</p>
-            <h2>Razorpay Test Mode evidence</h2>
-            <p>Every successful MANDATE checkout resolves to a real Razorpay Test Mode payment reference. Failed attempts remain visible without being promoted to merchant orders.</p>
-            <div className="flow-note"><span>MANDATE</span><i>→</i><span>Razorpay</span><i>→</i><span>Webhook</span></div>
-          </div>
-          <div className="ops-card">
-            <p className="eyebrow">Observed outcomes</p>
-            <h2>{formatINR(capturedVolume)} captured</h2>
-            <p>{failedAttempts} failed transaction attempt{failedAttempts === 1 ? "" : "s"} preserved as audit evidence. {realized.confirmedOrders ? `${formatINR(realized.realizedIncrementalRevenuePaise)} realized incremental revenue across ${realized.upliftedOrders} uplifted confirmed order${realized.upliftedOrders === 1 ? "" : "s"}.` : "Run an approved recommendation basket to measure realized lift here."}</p>
-            <div className="flow-note"><span>{realized.confirmedOrders} confirmed orders</span><i>•</i><span>{razorpayOrders} Razorpay orders</span></div>
-          </div>
-        </section>
-
-        {latestPayments.length ? (
-          <section className="transaction-table">
-            <div className="table-head"><span>Razorpay payment</span><span>MANDATE transaction</span><span>Amount</span><span>State</span><span>Evidence</span><span /></div>
-            {latestPayments.map((transaction) => {
-              const id = String(transaction.id);
-              const quote = transaction.quote as { totalPaise?: unknown } | undefined;
-              return <Link className="table-row" key={`payment-${id}`} href={`/operations/transactions/${encodeURIComponent(id)}`}>
-                <code>{String(transaction.razorpayPaymentId)}</code>
-                <span><code>{id}</code></span>
-                <strong>{typeof quote?.totalPaise === "number" ? formatINR(quote.totalPaise) : "—"}</strong>
-                <span className="state-text">{String(transaction.state).replaceAll("_", " ")}</span>
-                <span className="mini-status good">External payment ref</span>
-                <span>→</span>
-              </Link>;
-            })}
-          </section>
-        ) : null}
-
-        {latestOrders.length ? (
-          <section className="transaction-table">
-            <div className="table-head"><span>Merchant order</span><span>Transaction</span><span>Base basket</span><span>Final basket</span><span>Incremental</span><span /></div>
-            {latestOrders.map((order) => <Link className="table-row" key={order.id} href={`/operations/transactions/${encodeURIComponent(order.transactionId)}`}>
-              <code>{order.id}</code>
-              <span><code>{order.transactionId}</code></span>
-              <strong>{formatINR(order.baseAmountPaise)}</strong>
-              <strong>{formatINR(order.amountPaise)}</strong>
-              <strong>+{formatINR(order.incrementalRevenuePaise)}</strong>
-              <span>→</span>
-            </Link>)}
-          </section>
-        ) : null}
-
-        <section className="revenue-opportunities">
-          <div className="revenue-heading">
-            <div><p className="eyebrow">Revenue engine</p><h2>Agent-assisted opportunities</h2><p>Deterministic recommendations use catalog fit, customer proof, inventory and budget constraints. They can suggest a larger basket, but never authorize payment.</p></div>
-            <div className="opportunity-total"><span>Illustrative basket lift</span><strong>{formatINR(potentialLift)}</strong><small>Top {opportunities.length} eligible recommendations</small></div>
-          </div>
-          <div className="opportunity-grid">
-            {opportunities.map((item) => {
-              const source = catalog.find((product) => product.id === item.sourceProductId);
-              const target = catalog.find((product) => product.id === item.productId);
-              return <div className="opportunity-card" key={`${item.sourceProductId}-${item.productId}`}>
-                <div className="opportunity-top"><span className={`recommendation-type ${item.type.toLowerCase()}`}>{item.type}</span><span>{item.score.toFixed(1)} score</span></div>
-                <div className="opportunity-products"><strong>{source?.name ?? item.sourceProductId}</strong><span>→</span><strong>{target?.name ?? item.productId}</strong></div>
-                <p>{item.rationale}</p>
-                <div className="opportunity-foot"><span>In stock: {target?.inventory ?? 0}</span><strong>+{formatINR(item.incrementalRevenuePaise)}</strong></div>
-              </div>;
-            })}
-          </div>
-        </section>
-
-        <section className="transaction-table">
-          <div className="table-head"><span>Transaction</span><span>Product</span><span>Amount</span><span>Policy</span><span>Payment</span><span>State</span></div>
-          {transactions.length ? transactions.map((transaction) => {
-            const id = String(transaction.id);
-            const intent = transaction.intent as { productId?: string } | undefined;
-            const quote = transaction.quote as { totalPaise?: number } | undefined;
-            const policy = transaction.policy as { decision?: string } | undefined;
-            return (
-              <Link className="table-row" key={id} href={`/operations/transactions/${encodeURIComponent(id)}`}>
-                <code>{id}</code>
-                <span>{intent?.productId ?? "—"}</span>
-                <strong>{typeof quote?.totalPaise === "number" ? formatINR(quote.totalPaise) : "—"}</strong>
-                <span className={`mini-status ${policy?.decision === "BLOCK" ? "bad" : "good"}`}>{policy?.decision ?? "Pending"}</span>
-                <span>{transaction.razorpayPaymentId ? "Referenced" : "Not started"}</span>
-                <span className="state-text">{String(transaction.state).replaceAll("_", " ")}</span>
-              </Link>
-            );
-          }) : (
-            <div className="table-empty"><strong>No agent transactions yet.</strong><span>Launch the buyer app and run the first purchase evaluation.</span></div>
-          )}
-        </section>
-
-        <section className="ops-bottom-grid">
-          <div className="ops-card"><p className="eyebrow">Agent commerce</p><h2>Machine-readable by default.</h2><p>Mandate Market exposes product, inventory and checkout interfaces so a buyer can discover the merchant without scraping the storefront.</p><a href="/.well-known/agent-commerce">View merchant manifest →</a></div>
-          <div className="ops-card dark-card"><p className="eyebrow">Transaction principle</p><h2>AI can propose. The gateway authorizes.</h2><p>Razorpay credentials live outside the buyer application. A policy block stops before an order is created.</p><div className="flow-note"><span>AI</span><i>→</i><span>Policy</span><i>→</i><span>Razorpay</span></div></div>
-        </section>
-      </div>
-    </main>
-  );
+  for (const product of catalog) for (const recommendation of getRevenueRecommendations(product.id)) { const existing = opportunityMap.get(recommendation.productId); if (!existing || recommendation.score > existing.score) opportunityMap.set(recommendation.productId, recommendation); }
+  const opportunities = [...opportunityMap.values()].sort((a, b) => b.score - a.score).slice(0, 4); const potentialLift = opportunities.reduce((sum, item) => sum + item.incrementalRevenuePaise, 0); const latestPayments = transactions.filter((txn) => Boolean(txn.razorpayPaymentId)).slice(0, 4); const latestOrders = merchantOrders.slice(0, 4);
+  return <main className="ops-page">
+    <header className="ops-header"><Link href="/" className="brand"><span className="brand-mark">M</span><span>Mandate Market</span></Link><div className="ops-nav"><span>Operations</span><Link href="/">Storefront</Link><span className="mode-pill">Razorpay Test Mode</span></div></header>
+    <div className="ops-container">
+      <div className="ops-title-row"><div><p className="eyebrow">Merchant operations</p><h1>Transactions</h1><p className="ops-copy">A live view of purchases proposed by agents and authorized through MANDATE.</p></div><div className="ops-system"><span className="status-dot" /> Gateway online</div></div>
+      <section className="metrics-grid"><div><span>Transactions observed</span><strong>{transactions.length}</strong><small>Current gateway state</small></div><div><span>Policy blocks</span><strong>{blocks}</strong><small>Stopped before Razorpay</small></div><div><span>Razorpay orders</span><strong>{razorpayOrders}</strong><small>Test Mode orders created</small></div><div><span>Merchant confirmations</span><strong>{confirmed}</strong><small>Verified payment path</small></div></section>
+      <section className="ops-bottom-grid"><div className="ops-card"><p className="eyebrow">Payment rail</p><h2>Razorpay Test Mode evidence</h2><p>Every successful MANDATE checkout resolves to a real Razorpay Test Mode payment reference. Failed attempts remain visible without being promoted to merchant orders.</p><div className="flow-note"><span>MANDATE</span><i>→</i><span>Razorpay</span><i>→</i><span>Webhook</span></div></div><div className="ops-card"><p className="eyebrow">Observed outcomes</p><h2>{formatINR(capturedVolume)} captured</h2><p>{failedAttempts} failed transaction attempt{failedAttempts === 1 ? "" : "s"} preserved as audit evidence. {revenue.confirmedOrders ? `${formatINR(revenue.realizedIncrementalRevenuePaise)} realized incremental revenue across ${revenue.upliftedOrders} uplifted confirmed order${revenue.upliftedOrders === 1 ? "" : "s"}.` : "Run an approved recommendation basket to measure realized lift here."}</p><div className="flow-note"><span>{revenue.confirmedOrders} confirmed orders</span><i>•</i><span>Durable attribution</span></div></div></section>
+      {latestPayments.length ? <section className="transaction-table"><div className="table-head"><span>Razorpay payment</span><span>MANDATE transaction</span><span>Amount</span><span>State</span><span>Evidence</span><span /></div>{latestPayments.map((transaction) => { const id = String(transaction.id); const quote = transaction.quote as { totalPaise?: unknown } | undefined; return <Link className="table-row" key={`payment-${id}`} href={`/operations/transactions/${encodeURIComponent(id)}`}><code>{String(transaction.razorpayPaymentId)}</code><span><code>{id}</code></span><strong>{typeof quote?.totalPaise === "number" ? formatINR(quote.totalPaise) : "—"}</strong><span className="state-text">{String(transaction.state).replaceAll("_", " ")}</span><span className="mini-status good">External payment ref</span><span>→</span></Link>; })}</section> : null}
+      {latestOrders.length ? <section className="transaction-table"><div className="table-head"><span>Merchant order</span><span>Transaction</span><span>Base basket</span><span>Final basket</span><span>Incremental</span><span /></div>{latestOrders.map((order) => <Link className="table-row" key={order.merchantOrderId} href={`/operations/transactions/${encodeURIComponent(order.transactionId)}`}><code>{order.merchantOrderId}</code><span><code>{order.transactionId}</code></span><strong>{formatINR(order.baseAmountPaise)}</strong><strong>{formatINR(order.amountPaise)}</strong><strong>+{formatINR(order.incrementalRevenuePaise)}</strong><span>→</span></Link>)}</section> : null}
+      <section className="revenue-opportunities"><div className="revenue-heading"><div><p className="eyebrow">Revenue engine</p><h2>Agent-assisted opportunities</h2><p>Deterministic recommendations use catalog fit, customer proof, inventory and budget constraints. They can suggest a larger basket, but never authorize payment.</p></div><div className="opportunity-total"><span>Illustrative basket lift</span><strong>{formatINR(potentialLift)}</strong><small>Top {opportunities.length} eligible recommendations</small></div></div><div className="opportunity-grid">{opportunities.map((item) => { const source = catalog.find((product) => product.id === item.sourceProductId); const target = catalog.find((product) => product.id === item.productId); return <div className="opportunity-card" key={`${item.sourceProductId}-${item.productId}`}><div className="opportunity-top"><span className={`recommendation-type ${item.type.toLowerCase()}`}>{item.type}</span><span>{item.score.toFixed(1)} score</span></div><div className="opportunity-products"><strong>{source?.name ?? item.sourceProductId}</strong><span>→</span><strong>{target?.name ?? item.productId}</strong></div><p>{item.rationale}</p><div className="opportunity-foot"><span>In stock: {target?.inventory ?? 0}</span><strong>+{formatINR(item.incrementalRevenuePaise)}</strong></div></div>; })}</div></section>
+      <section className="transaction-table"><div className="table-head"><span>Transaction</span><span>Product</span><span>Amount</span><span>Policy</span><span>Payment</span><span>State</span></div>{transactions.length ? transactions.map((transaction) => { const id = String(transaction.id); const intent = transaction.intent as { productId?: string } | undefined; const quote = transaction.quote as { totalPaise?: number } | undefined; const policy = transaction.policy as { decision?: string } | undefined; return <Link className="table-row" key={id} href={`/operations/transactions/${encodeURIComponent(id)}`}><code>{id}</code><span>{intent?.productId ?? "—"}</span><strong>{typeof quote?.totalPaise === "number" ? formatINR(quote.totalPaise) : "—"}</strong><span className={`mini-status ${policy?.decision === "BLOCK" ? "bad" : "good"}`}>{policy?.decision ?? "Pending"}</span><span>{transaction.razorpayPaymentId ? "Referenced" : "Not started"}</span><span className="state-text">{String(transaction.state).replaceAll("_", " ")}</span></Link>; }) : <div className="table-empty"><strong>No agent transactions yet.</strong><span>Launch the buyer app and run the first purchase evaluation.</span></div>}</section>
+      <section className="ops-bottom-grid"><div className="ops-card"><p className="eyebrow">Agent commerce</p><h2>Machine-readable by default.</h2><p>Mandate Market exposes product, inventory and checkout interfaces so a buyer can discover the merchant without scraping the storefront.</p><a href="/.well-known/agent-commerce">View merchant manifest →</a></div><div className="ops-card dark-card"><p className="eyebrow">Transaction principle</p><h2>AI can propose. The gateway authorizes.</h2><p>Razorpay credentials live outside the buyer application. A policy block stops before an order is created.</p><div className="flow-note"><span>AI</span><i>→</i><span>Policy</span><i>→</i><span>Razorpay</span></div></div></section>
+    </div>
+  </main>;
 }
