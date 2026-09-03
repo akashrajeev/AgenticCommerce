@@ -5,11 +5,13 @@ import type {
   PaymentAuthorization,
   PaymentMandate,
   PurchaseIntent,
+  SignedUserMandate,
   Transaction,
   UserMandate,
 } from "@mandate/types";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { config } from "./config.js";
+import { verifySignedUserMandate } from "./mandate-credentials.js";
 import { addMandateAuthorizationAudit, proposeTransaction } from "./transaction-core.js";
 
 export type MandateCheckoutBindingInput = CheckoutBindingInput & {
@@ -29,6 +31,10 @@ export type MandateAuthorizationResult = {
   authorization: PaymentAuthorization;
   binding: string;
   bindingSignature: string;
+};
+
+export type SignedMandateAuthorizationInput = Omit<MandateAuthorizationInput, "userMandate"> & {
+  userMandate: SignedUserMandate;
 };
 
 function assertSafeTime(value: string, field: string): number {
@@ -146,4 +152,11 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
     bindingSignature,
   });
   return { transaction, checkoutMandate, paymentMandate, authorization, binding, bindingSignature };
+}
+
+export async function authorizeSignedCheckout(input: SignedMandateAuthorizationInput): Promise<MandateAuthorizationResult> {
+  verifySignedUserMandate(input.userMandate);
+  const { credential: _credential, ...unsignedMandate } = input.userMandate;
+  void _credential;
+  return authorizeCheckout({ ...input, userMandate: unsignedMandate });
 }
