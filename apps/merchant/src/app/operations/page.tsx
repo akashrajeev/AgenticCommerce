@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { catalog } from "../../lib/catalog";
 import { getRevenueRecommendations } from "../../lib/revenue";
+import { getRealizedRevenueAttribution, listMerchantOrders } from "../../lib/orders";
 
 export const dynamic = "force-dynamic";
 
@@ -21,18 +22,6 @@ async function getTransactions() {
   }
 }
 
-function getBasketLift(transaction: TransactionRow): number {
-  const state = String(transaction.state);
-  if (state !== "order_confirmed") return 0;
-  const quote = transaction.quote as { totalPaise?: unknown; lineItems?: Array<{ lineTotalPaise?: unknown }> } | undefined;
-  const lineItems = quote?.lineItems ?? [];
-  if (lineItems.length < 2) return 0;
-  const firstLine = lineItems[0];
-  const firstTotal = typeof firstLine?.lineTotalPaise === "number" ? firstLine.lineTotalPaise : 0;
-  const total = typeof quote?.totalPaise === "number" ? quote.totalPaise : 0;
-  return Math.max(total - firstTotal, 0);
-}
-
 export default async function OperationsPage() {
   const transactions = await getTransactions();
   const blocks = transactions.filter((txn) => (txn.policy as { decision?: string } | undefined)?.decision === "BLOCK").length;
@@ -40,7 +29,8 @@ export default async function OperationsPage() {
   const confirmed = transactions.filter((txn) => txn.state === "order_confirmed").length;
   const capturedVolume = transactions.reduce((sum, txn) => sum + (txn.state === "order_confirmed" && typeof (txn.quote as { totalPaise?: unknown } | undefined)?.totalPaise === "number" ? Number((txn.quote as { totalPaise: number }).totalPaise) : 0), 0);
   const failedAttempts = transactions.filter((txn) => txn.state === "payment_failed").length;
-  const realizedBasketLift = transactions.reduce((sum, txn) => sum + getBasketLift(txn), 0);
+  const merchantOrders = listMerchantOrders();
+  const realized = getRealizedRevenueAttribution();
 
   const opportunityMap = new Map<string, ReturnType<typeof getRevenueRecommendations>[number]>();
   for (const product of catalog) {
@@ -52,6 +42,7 @@ export default async function OperationsPage() {
   const opportunities = [...opportunityMap.values()].sort((a, b) => b.score - a.score).slice(0, 4);
   const potentialLift = opportunities.reduce((sum, item) => sum + item.incrementalRevenuePaise, 0);
   const latestPayments = transactions.filter((txn) => Boolean(txn.razorpayPaymentId)).slice(0, 4);
+  const latestOrders = merchantOrders.slice(0, 4);
 
   return (
     <main className="ops-page">
@@ -83,8 +74,8 @@ export default async function OperationsPage() {
           <div className="ops-card">
             <p className="eyebrow">Observed outcomes</p>
             <h2>{formatINR(capturedVolume)} captured</h2>
-            <p>{failedAttempts} failed transaction attempt{failedAttempts === 1 ? "" : "s"} preserved as audit evidence. {realizedBasketLift ? `${formatINR(realizedBasketLift)} of confirmed basket lift is attributable to multi-line baskets.` : "Run an approved recommendation basket to measure realized lift here."}</p>
-            <div className="flow-note"><span>{confirmed} confirmed</span><i>•</i><span>{razorpayOrders} Razorpay orders</span></div>
+            <p>{failedAttempts} failed transaction attempt{failedAttempts === 1 ? "" : "s"} preserved as audit evidence. {realized.confirmedOrders ? `${formatINR(realized.realizedIncrementalRevenuePaise)} realized incremental revenue across ${realized.upliftedOrders} uplifted confirmed order${realized.upliftedOrders === 1 ? "" : "s"}.` : "Run an approved recommendation basket to measure realized lift here."}</p>
+            <div className="flow-note"><span>{realized.confirmedOrders} confirmed orders</span><i>•</i><span>{razorpayOrders} Razorpay orders</span></div>
           </div>
         </section>
 
@@ -103,6 +94,20 @@ export default async function OperationsPage() {
                 <span>→</span>
               </Link>;
             })}
+          </section>
+        ) : null}
+
+        {latestOrders.length ? (
+          <section className="transaction-table">
+            <div className="table-head"><span>Merchant order</span><span>Transaction</span><span>Base basket</span><span>Final basket</span><span>Incremental</span><span /></div>
+            {latestOrders.map((order) => <Link className="table-row" key={order.id} href={`/operations/transactions/${encodeURIComponent(order.transactionId)}`}>
+              <code>{order.id}</code>
+              <span><code>{order.transactionId}</code></span>
+              <strong>{formatINR(order.baseAmountPaise)}</strong>
+              <strong>{formatINR(order.amountPaise)}</strong>
+              <strong>+{formatINR(order.incrementalRevenuePaise)}</strong>
+              <span>→</span>
+            </Link>)}
           </section>
         ) : null}
 
