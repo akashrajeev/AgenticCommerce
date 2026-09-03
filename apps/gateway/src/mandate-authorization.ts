@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import type {
   CheckoutBindingInput,
   CheckoutMandate,
@@ -41,6 +41,10 @@ function mandateExpiry(userMandate: UserMandate, checkout: CheckoutBindingInput)
   return new Date(Math.min(assertSafeTime(userMandate.expiresAt, "expiry"), assertSafeTime(checkout.expiresAt, "checkout_expiry"))).toISOString();
 }
 
+function checkoutCartHash(checkout: CheckoutBindingInput): string {
+  return createHash("sha256").update(canonicalizeCheckoutBinding(checkout)).digest("hex");
+}
+
 function signBinding(binding: string): string {
   return createHmac("sha256", config.internalGatewaySecret).update(binding).digest("hex");
 }
@@ -68,6 +72,7 @@ function validateMandateShape(userMandate: UserMandate, checkout: CheckoutBindin
   }
   if (!checkout.lineItems.length || checkout.lineItems.length > 10) throw new Error("INVALID_CHECKOUT_ITEMS");
   if (checkout.lineItems.some((line) => !line.productId || !Number.isSafeInteger(line.quantity) || line.quantity < 1 || line.unitPricePaise < 0 || line.lineTotalPaise !== line.unitPricePaise * line.quantity)) throw new Error("INVALID_CHECKOUT_LINE");
+  if (checkoutCartHash(checkout) !== checkout.cartHash) throw new Error("CHECKOUT_CART_HASH_MISMATCH");
 }
 
 export async function authorizeCheckout(input: MandateAuthorizationInput): Promise<MandateAuthorizationResult> {
@@ -87,9 +92,7 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
     quoteId: input.checkout.quoteId,
   };
   const transaction = await proposeTransaction(purchaseIntent);
-  if (transaction.state !== "policy_authorized") {
-    throw new Error(`MANDATE_POLICY_BLOCKED:${transaction.state}`);
-  }
+  if (transaction.state !== "policy_authorized") throw new Error(`MANDATE_POLICY_BLOCKED:${transaction.state}`);
   if (transaction.quote.totalPaise !== input.checkout.totalPaise) throw new Error("MANDATE_AMOUNT_REVALIDATION_FAILED");
   const rebound = canonicalizeCheckoutBinding({ ...input.checkout, totalPaise: transaction.quote.totalPaise });
   if (rebound !== binding) throw new Error("MANDATE_BINDING_CHANGED");
