@@ -1,4 +1,4 @@
-import { agentCommerceCapabilities } from "../../../lib/agent-capabilities";
+import { agentCommerceCapabilities } from "../../../../lib/agent-capabilities";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
