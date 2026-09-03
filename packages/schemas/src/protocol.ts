@@ -7,6 +7,9 @@ export const paymentAuthorizationStatusSchema = z.enum(["authorized", "declined"
 export const paymentReceiptStatusSchema = z.enum(["authorized", "captured", "failed", "refunded"]);
 export const delegatedMandateStatusSchema = z.enum(["active", "revoked", "expired", "exhausted"]);
 export const delegatedMandateExecutionStatusSchema = z.enum(["reserved", "confirmed", "released"]);
+export const negotiationTurnActorSchema = z.enum(["buyer_agent", "merchant_agent"]);
+export const negotiationTurnTypeSchema = z.enum(["intent", "offer", "selection", "counter", "rejection"]);
+export const negotiationStatusSchema = z.enum(["proposed", "accepted", "rejected", "expired"]);
 
 const metadataSchema = z.record(z.union([z.string(), z.number(), z.boolean(), z.null()]));
 const moneySchema = z.object({
@@ -69,6 +72,27 @@ export const merchantOfferSchema = z.object({
   quoteId: z.string().min(1),
   conditions: metadataSchema,
   sourceProtocol: commerceProtocolSchema,
+  createdAt: z.string().datetime(),
+  expiresAt: z.string().datetime(),
+});
+
+export const negotiationTurnSchema = z.object({
+  turnId: z.string().min(1),
+  actor: negotiationTurnActorSchema,
+  type: negotiationTurnTypeSchema,
+  message: z.string().min(1).max(1000),
+  offerId: z.string().min(1).optional(),
+  createdAt: z.string().datetime(),
+});
+
+export const negotiationSessionSchema = z.object({
+  negotiationId: z.string().min(1),
+  intent: commerceIntentSchema,
+  merchant: agentIdentitySchema.extend({ agentType: z.literal("merchant") }),
+  offers: z.array(merchantOfferSchema).min(1).max(10),
+  selectedOfferId: z.string().min(1).optional(),
+  status: negotiationStatusSchema,
+  turns: z.array(negotiationTurnSchema).min(1).max(30),
   createdAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
 });
@@ -218,6 +242,8 @@ export const checkoutBindingInputSchema = z.object({
 
 export type CommerceIntentInput = z.infer<typeof commerceIntentSchema>;
 export type MerchantOfferInput = z.infer<typeof merchantOfferSchema>;
+export type NegotiationTurnInput = z.infer<typeof negotiationTurnSchema>;
+export type NegotiationSessionInput = z.infer<typeof negotiationSessionSchema>;
 export type CheckoutSessionInput = z.infer<typeof checkoutSessionSchema>;
 export type UserMandateInput = z.infer<typeof userMandateSchema>;
 export type SignedUserMandateInput = z.infer<typeof signedUserMandateSchema>;
