@@ -1,4 +1,4 @@
-import type { CheckoutLineItem, DelegatedMandate, DelegatedMandateExecution, MoneyAmount, PurchaseIntent, Transaction } from "@mandate/types";
+import type { CheckoutLineItem, DelegatedMandate, DelegatedMandateExecution, MoneyAmount } from "@mandate/types";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { config } from "./config.js";
 import { authorizeCheckout, type MandateAuthorizationResult, type MandateCheckoutBindingInput } from "./mandate-authorization.js";
@@ -7,6 +7,7 @@ import {
   deleteDelegatedMandateExecution,
   loadDelegatedMandates,
   loadDelegatedMandateExecutions,
+  reserveDelegatedMandateSpend,
   saveDelegatedMandate,
   saveDelegatedMandateExecution,
   settleDelegatedMandateSpend,
@@ -109,6 +110,7 @@ function validateAgainstMandate(mandate: DelegatedMandate, checkout: MandateChec
   updateStatus(mandate);
   if (mandate.status !== "active") throw new Error(mandate.status === "expired" ? "DELEGATED_MANDATE_EXPIRED" : mandate.status === "exhausted" ? "DELEGATED_MANDATE_EXHAUSTED" : "DELEGATED_MANDATE_REVOKED");
   if (checkout.currency !== "INR") throw new Error("DELEGATED_MANDATE_CURRENCY_MISMATCH");
+  if (!Number.isSafeInteger(checkout.totalPaise) || checkout.totalPaise <= 0) throw new Error("INVALID_DELEGATED_CHECKOUT_AMOUNT");
   if (checkout.totalPaise > mandate.maxSpendPerPurchase.amountPaise) throw new Error("DELEGATED_MANDATE_PER_PURCHASE_LIMIT");
   if (remainingPaise(mandate) < checkout.totalPaise) throw new Error("DELEGATED_MANDATE_REMAINING_BUDGET");
   if (mandate.merchantIds.length && !mandate.merchantIds.includes(checkout.merchantId)) throw new Error("DELEGATED_MANDATE_MERCHANT_NOT_ALLOWED");
@@ -116,8 +118,7 @@ function validateAgainstMandate(mandate: DelegatedMandate, checkout: MandateChec
     const allowed = new Set(mandate.allowedProductIds);
     if (getEffectiveLineItems(checkout).some((line) => !allowed.has(line.productId))) throw new Error("DELEGATED_MANDATE_PRODUCT_NOT_ALLOWED");
   }
-  const binding = canonicalizeCheckoutBinding(checkout);
-  if (!binding) throw new Error("DELEGATED_MANDATE_BINDING_INVALID");
+  if (!canonicalizeCheckoutBinding(checkout)) throw new Error("DELEGATED_MANDATE_BINDING_INVALID");
 }
 
 export async function executeDelegatedMandate(mandateId: string, checkout: MandateCheckoutBindingInput): Promise<{ mandate: DelegatedMandate; execution: DelegatedMandateExecution; authorization: MandateAuthorizationResult }> {
@@ -132,14 +133,30 @@ export async function executeDelegatedMandate(mandateId: string, checkout: Manda
   }
 
   const executionId = `dexec_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
-  const execution: DelegatedMandateExecution = { executionId, mandateId, transactionId: "", amount: { currency: "INR", amountPaise: checkout.totalPaise }, status: "reserved", createdAt: nowIso() };
+  const execution: DelegatedMandateExecution = {
+    executionId,
+    mandateId,
+    transactionId: "",
+    amount: { currency: "INR", amountPaise: checkout.totalPaise },
+    status: "reserved",
+    createdAt: nowIso(),
+  };
+
   mandate.reservedPaise += checkout.totalPaise;
   mandate.executionCount += 1;
+  if (config.databaseUrl) {
+    const reserved = await reserveDelegatedMandateSpend(mandateId, checkout.totalPaise);
+    if (!reserved) {
+      mandate.reservedPaise = Math.max(0, mandate.reservedPaise - checkout.totalPaise);
+      mandate.executionCount = Math.max(0, mandate.executionCount - 1);
+      updateStatus(mandate);
+      throw new Error("DELEGATED_MANDATE_RESERVATION_FAILED");
+    }
+  }
   await saveDelegatedMandate(mandate);
   executions.set(executionId, execution);
+
   try {
-    const firstLine = checkout.lineItems[0];
-    if (!firstLine) throw new Error("INVALID_CHECKOUT_ITEMS");
     const userMandate = {
       mandateId,
       subjectId: mandate.subjectId,
@@ -168,7 +185,9 @@ export async function executeDelegatedMandate(mandateId: string, checkout: Manda
     return { mandate, execution, authorization };
   } catch (error) {
     mandate.reservedPaise = Math.max(0, mandate.reservedPaise - checkout.totalPaise);
+    mandate.executionCount = Math.max(0, mandate.executionCount - 1);
     updateStatus(mandate);
+    await settleDelegatedMandateSpend(mandateId, checkout.totalPaise, "released");
     await saveDelegatedMandate(mandate);
     executions.delete(executionId);
     await deleteDelegatedMandateExecution(executionId);
@@ -184,6 +203,7 @@ export async function settleDelegatedExecution(transactionId: string, outcome: "
   execution.status = outcome;
   mandate.reservedPaise = Math.max(0, mandate.reservedPaise - execution.amount.amountPaise);
   if (outcome === "confirmed") mandate.spentPaise += execution.amount.amountPaise;
+  await settleDelegatedMandateSpend(execution.mandateId, execution.amount.amountPaise, outcome);
   updateStatus(mandate);
   await saveDelegatedMandate(mandate);
   await saveDelegatedMandateExecution(execution);
@@ -197,4 +217,9 @@ export function delegatedMandateStats(mandateId: string) {
     remainingPaise: remainingPaise(mandate),
     remainingDisplay: `₹${(remainingPaise(mandate) / 100).toFixed(2)}`,
   };
+}
+
+export function clearDelegatedMandateStore(): void {
+  mandates.clear();
+  executions.clear();
 }
