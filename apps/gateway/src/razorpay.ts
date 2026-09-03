@@ -100,7 +100,7 @@ export async function capturePayment(paymentId: string, amountPaise: number): Pr
 }
 
 export function verifyCheckoutSignature(orderId: string, paymentId: string, signature: string): boolean {
-  if (!config.razorpayKeySecret || !orderId || !paymentId || !signature) return false;
+  if (!isRazorpayTestMode() || !config.razorpayKeySecret || !orderId || !paymentId || !signature) return false;
   const expected = createHmac("sha256", config.razorpayKeySecret)
     .update(`${orderId}|${paymentId}`)
     .digest("hex");
@@ -111,7 +111,7 @@ export function verifyCheckoutSignature(orderId: string, paymentId: string, sign
 }
 
 export function verifyWebhookSignature(rawBody: string, signature: string): boolean {
-  if (!config.razorpayWebhookSecret || !signature) return false;
+  if (!isRazorpayTestMode() || !config.razorpayWebhookSecret || !signature) return false;
   const expected = createHmac("sha256", config.razorpayWebhookSecret)
     .update(rawBody, "utf8")
     .digest("hex");
