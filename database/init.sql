@@ -32,6 +32,20 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   received_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS negotiation_acceptances (
+  key TEXT PRIMARY KEY,
+  negotiation_id TEXT NOT NULL,
+  mandate_id TEXT NOT NULL,
+  offer JSONB NOT NULL,
+  transaction_id TEXT NOT NULL UNIQUE,
+  execution_id TEXT NOT NULL,
+  authorization_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS negotiation_acceptances_lookup_idx
+  ON negotiation_acceptances(negotiation_id, mandate_id);
+
 CREATE TABLE IF NOT EXISTS merchant_orders (
   merchant_order_id TEXT PRIMARY KEY,
   transaction_id TEXT NOT NULL UNIQUE,
