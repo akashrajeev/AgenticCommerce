@@ -23,7 +23,7 @@ Merchant Agent
   |
   | live catalog + inventory + quote
   v
-Merchant Offers
+Merchant Offers + signed attestations
   |
   v
 Buyer Agent selection
@@ -34,7 +34,8 @@ User's delegated mandate
   v
 MANDATE gateway
   |
-  +-- merchant-issued offer attestation
+  +-- merchant identity credential verification
+  +-- signed offer verification
   +-- authoritative quote revalidation
   +-- cart binding
   +-- deterministic policy
@@ -49,9 +50,11 @@ Razorpay Test Mode
 
 ## Merchant agent
 
-Endpoint:
+Endpoints:
 
 ```text
+GET  /.well-known/agent-commerce
+GET  /.well-known/agent-credentials
 POST /api/agent/negotiate
 GET  /api/agent/negotiate/:id
 ```
@@ -62,23 +65,37 @@ The merchant agent:
 - filters candidates against the buyer's stated budget/category;
 - creates real merchant checkout quotes;
 - publishes `MerchantOffer` objects containing exact quote, line items, amount and expiry;
+- signs each offer with the merchant agent's Ed25519 credential;
 - stores the issued offer set for later attestation.
 
 The merchant agent does not create Razorpay orders.
 
-## Buyer agent
+## Merchant identity and offer attestation
 
-Endpoint:
+The public credential endpoint returns the merchant agent identity and Ed25519 public key:
 
 ```text
-POST /api/agent/negotiate
+algorithm
+keyId
+merchantId
+agentId
+issuer
+publicKeyPem
 ```
 
-The buyer agent passes the request to the merchant agent, retrieves the resulting offers, loads the corresponding merchant product facts, and selects the best offer according to deterministic value/quality scoring.
+Each offer is accompanied by an attestation containing:
 
-This is intentionally separate from payment authorization: the buyer can recommend or select an offer, but the gateway remains the authority that can bind it to a delegated mandate.
+```text
+offerId
+credential
+signatureBase64
+```
 
-## Offer attestation
+The signature covers the canonicalized offer plus the complete credential, binding the merchant identity to the exact offer payload.
+
+Production merchant deployments must provide `MERCHANT_AGENT_PRIVATE_KEY_B64`; local development uses an ephemeral Ed25519 key so no production secret is embedded in the repository.
+
+## Gateway acceptance
 
 The acceptance endpoint is:
 
@@ -86,7 +103,7 @@ The acceptance endpoint is:
 POST /v1/negotiations/:negotiationId/accept
 ```
 
-Before accepting an offer, the gateway verifies that:
+Before accepting an offer, the gateway verifies that the merchant actually issued it and validates the signed credential. It checks:
 
 ```text
 offerId
@@ -97,9 +114,9 @@ amount
 source protocol
 expiry
 line items
+merchant credential identity
+Ed25519 signature
 ```
-
-match the offer the merchant agent actually issued for that negotiation.
 
 It then fetches the merchant's authoritative quote again and compares:
 
@@ -122,9 +139,9 @@ The acceptance boundary is idempotent for the tuple:
 negotiationId + mandateId + offerId
 ```
 
-The first successful acceptance creates a transaction. A repeated request for the same tuple replays the existing transaction reference rather than creating another delegated spend.
+Accepted references are persisted in PostgreSQL, restored on gateway startup, and replayed from the durable acceptance record instead of relying only on process memory.
 
-A changed offer amount, item, merchant or quote reference fails the merchant-attestation or quote-revalidation boundary before a new transaction is authorized.
+A changed offer amount, item, merchant, credential or quote reference fails the signed attestation or quote-revalidation boundary before a new transaction is authorized.
 
 ## Judge demo
 
@@ -141,28 +158,29 @@ Recommended sequence:
 2. Enter: “Find the best ANC headphones under ₹5,000.”
 3. Start negotiation.
 4. Show the Buyer Agent intent.
-5. Show the Merchant Agent returning multiple live offers.
+5. Show the Merchant Agent returning multiple live offers and attestations.
 6. Show the Buyer Agent selecting one.
 7. Accept the selected offer.
-8. Show the gateway creating a transaction under the delegated mandate.
-9. Click “Tamper amount → test block” on a fresh negotiation.
-10. Show that the gateway rejects the altered amount before payment authority.
-11. Continue to the existing Razorpay Test Mode checkout path.
+8. Show the gateway verifying the merchant signature and creating a transaction under the delegated mandate.
+9. Tamper with the amount/signature and show the gateway reject it before payment authority.
+10. Continue to the existing Razorpay Test Mode checkout path.
 ```
 
 ## Implementation status
 
 ```text
-Merchant-agent offer generation       IMPLEMENTED
-authoritative live merchant quoting   IMPLEMENTED
-Buyer-agent offer evaluation           IMPLEMENTED
-Merchant-issued offer attestation      IMPLEMENTED
-Gateway offer acceptance boundary      IMPLEMENTED
-Delegated mandate integration           IMPLEMENTED
-Razorpay Test Mode hand-off             EXISTING TRUSTED PATH
-Cross-process persistent negotiations   NOT IMPLEMENTED
-Cryptographic merchant-agent signing    NOT IMPLEMENTED
-Full external A2A protocol conformance NOT CLAIMED
+Merchant-agent offer generation        IMPLEMENTED
+authoritative live merchant quoting    IMPLEMENTED
+Buyer-agent offer evaluation            IMPLEMENTED
+Merchant-issued offer attestation       IMPLEMENTED
+Ed25519 merchant signing                IMPLEMENTED
+Gateway signature verification          IMPLEMENTED
+Delegated mandate integration            IMPLEMENTED
+Persistent acceptance idempotency        IMPLEMENTED
+Gateway acceptance restart hydration     IMPLEMENTED
+Merchant negotiation session durability  NOT IMPLEMENTED
+Razorpay Test Mode hand-off              EXISTING TRUSTED PATH
+Full external A2A protocol conformance   NOT CLAIMED
 ```
 
-The current negotiation store is intentionally in-memory for the demo deployment. A production horizontally scaled implementation should persist negotiations and add an authenticated or signed merchant-agent credential over the offer envelope.
+The merchant's active negotiation session is still process-local for the demo deployment. The accepted-offer/idempotency boundary is durable in PostgreSQL, so gateway restarts do not create a second transaction for an already-accepted offer.
