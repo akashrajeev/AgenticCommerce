@@ -50,3 +50,39 @@ CREATE TABLE IF NOT EXISTS merchant_orders (
 
 CREATE INDEX IF NOT EXISTS merchant_orders_created_at_idx
   ON merchant_orders(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS delegated_mandates (
+  mandate_id TEXT PRIMARY KEY,
+  subject_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  merchant_ids JSONB NOT NULL,
+  allowed_product_ids JSONB,
+  max_spend_per_purchase_paise BIGINT NOT NULL,
+  total_budget_paise BIGINT NOT NULL,
+  spent_paise BIGINT NOT NULL DEFAULT 0,
+  reserved_paise BIGINT NOT NULL DEFAULT 0,
+  execution_count INTEGER NOT NULL DEFAULT 0,
+  blocked_count INTEGER NOT NULL DEFAULT 0,
+  approval_mode TEXT NOT NULL,
+  constraints JSONB NOT NULL,
+  nonce TEXT NOT NULL UNIQUE,
+  issued_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS delegated_mandate_executions (
+  execution_id TEXT PRIMARY KEY,
+  mandate_id TEXT NOT NULL REFERENCES delegated_mandates(mandate_id) ON DELETE CASCADE,
+  transaction_id TEXT NOT NULL UNIQUE,
+  amount_paise BIGINT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS delegated_mandates_subject_idx
+  ON delegated_mandates(subject_id, issued_at DESC);
+
+CREATE INDEX IF NOT EXISTS delegated_executions_mandate_idx
+  ON delegated_mandate_executions(mandate_id, created_at DESC);
