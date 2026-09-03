@@ -11,7 +11,7 @@
     "typecheck": "prisma generate --config ../../prisma.config.ts && tsc -p tsconfig.json --noEmit",
     "test": "tsx --test src/*.test.ts",
     "prisma:generate": "prisma generate --config ../../prisma.config.ts",
-    "prisma:smoke": "tsx --test src/persistence-prisma.integration.test.ts",
+    "prisma:smoke": "tsx --test src/persistence-prisma.integration.test.ts src/negotiation-prisma.integration.test.ts",
     "postinstall": "prisma generate --config ../../prisma.config.ts"
   },
   "dependencies": {
