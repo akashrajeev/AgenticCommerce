@@ -5,10 +5,7 @@ import { useMemo, useState } from "react";
 
 const MERCHANT_URL = process.env.NEXT_PUBLIC_MERCHANT_URL ?? "http://localhost:3000";
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:4000";
-
-const money = (paise: number) =>
-  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(paise / 100);
-
+const money = (paise: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(paise / 100);
 type Product = { id: string; name: string; category: string; pricePaise: number; rating: number; inventory: number; shortDescription: string; features: string[]; specifications: Record<string, string> };
 type Quote = { quoteId: string; totalPaise: number; expiresAt: string; lineItems: Array<{ productId: string; quantity: number }> };
 type Plan = { category: string; requirements: string[]; rankedProducts: Array<{ productId: string; score: number; rationale: string }>; selectedProductId: string; decisionSummary: string };
@@ -25,18 +22,11 @@ export default function BuyerWorkspace() {
   const [error, setError] = useState("");
   const [activity, setActivity] = useState<string[]>([]);
   const [checkout, setCheckout] = useState<RazorpayCheckout | null>(null);
-
   const selectedAmount = transaction?.quote.totalPaise ?? product?.pricePaise ?? 0;
   const remaining = Math.max(maxSpend * 100 - selectedAmount, 0);
   const blockedBySpend = transaction?.state === "policy_blocked" && transaction.policy?.checks.some((check) => check.rule === "MAX_SPEND" && check.result === "FAIL");
-  const statusLabel = useMemo(() => {
-    if (stage === "blocked") return "Blocked before payment";
-    if (stage === "authorized") return "Authorized";
-    if (stage === "working") return "Evaluating";
-    if (stage === "payment") return "Payment ready";
-    if (stage === "paid") return "Verified";
-    return "Ready";
-  }, [stage]);
+  const paymentFailed = transaction?.state === "payment_failed";
+  const statusLabel = useMemo(() => { if (stage === "blocked") return "Blocked before payment"; if (stage === "authorized") return "Authorized"; if (stage === "working") return "Evaluating"; if (stage === "payment") return "Payment ready"; if (stage === "paid") return "Verified"; return paymentFailed ? "Payment failed" : "Ready"; }, [stage, paymentFailed]);
 
   async function runAgent() {
     setError(""); setTransaction(null); setActivity([]); setProduct(null); setPlan(null); setCheckout(null); setStage("working");
@@ -44,25 +34,18 @@ export default function BuyerWorkspace() {
       setActivity(["Reading your constraints", "Discovering Mandate Market"]);
       const planResponse = await fetch("/api/agent/purchase-plan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request, maxSpendPaise: maxSpend * 100 }) });
       const planBody = await planResponse.json() as { plan?: Plan; selectedProduct?: Product; error?: string; detail?: string };
-      if (!planResponse.ok || !planBody.plan || !planBody.selectedProduct) throw new Error(planBody.error === "OPENAI_API_KEY_NOT_CONFIGURED" ? "Buyer model is not configured. Add OPENAI_API_KEY to the buyer server environment." : planBody.detail ?? planBody.error ?? "The buyer could not produce a purchase plan.");
-      const chosen = planBody.selectedProduct;
-      setPlan(planBody.plan); setProduct(chosen);
+      if (!planResponse.ok || !planBody.plan || !planBody.selectedProduct) throw new Error(planBody.detail ?? planBody.error ?? "The buyer could not produce a purchase plan.");
+      const chosen = planBody.selectedProduct; setPlan(planBody.plan); setProduct(chosen);
       setActivity((current) => [...current, "Catalog loaded through merchant API", `${planBody.plan!.rankedProducts.length} products ranked`, `${chosen.name} selected by buyer model`]);
-
       const quoteResponse = await fetch(`${MERCHANT_URL}/api/agent/checkout/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ productId: chosen.id, quantity: 1 }) });
       if (!quoteResponse.ok) throw new Error("Merchant could not produce a checkout quote.");
-      const quoteBody = await quoteResponse.json() as { quote: Quote };
-      setActivity((current) => [...current, "Checkout quote obtained"]);
-
+      const quoteBody = await quoteResponse.json() as { quote: Quote }; setActivity((current) => [...current, "Checkout quote obtained"]);
       const transactionResponse = await fetch(`${GATEWAY_URL}/v1/purchase-intents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ merchantId: "mandate-market", productId: chosen.id, quantity: 1, maxSpendPaise: maxSpend * 100, reason: request, quoteId: quoteBody.quote.quoteId }) });
       const transactionBody = await transactionResponse.json() as { transaction?: Transaction; error?: string };
       if (!transactionResponse.ok || !transactionBody.transaction) throw new Error(transactionBody.error ?? "Gateway rejected the purchase intent.");
       setTransaction(transactionBody.transaction);
-      if (transactionBody.transaction.state === "policy_authorized") {
-        setActivity((current) => [...current, "Policy approved the transaction"]); setStage("authorized");
-      } else {
-        setActivity((current) => [...current, "Policy blocked the transaction", "No Razorpay order was created"]); setStage("blocked");
-      }
+      if (transactionBody.transaction.state === "policy_authorized") { setActivity((current) => [...current, "Policy approved the transaction"]); setStage("authorized"); }
+      else { setActivity((current) => [...current, "Policy blocked the transaction", "No Razorpay order was created"]); setStage("blocked"); }
     } catch (caught) { setStage("ready"); setError(caught instanceof Error ? caught.message : "The agent could not complete the request."); }
   }
 
@@ -78,6 +61,19 @@ export default function BuyerWorkspace() {
       await fetch(`${GATEWAY_URL}/v1/transactions/${transaction.id}/checkout-started`, { method: "POST" });
       setStage("payment"); setActivity((current) => [...current, `Razorpay order ${body.order!.id} created`]);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Razorpay checkout could not be prepared."); }
+  }
+
+  async function retryPayment() {
+    if (!transaction || transaction.state !== "payment_failed") return;
+    setError(""); setCheckout(null); setStage("working"); setActivity((current) => [...current, "Starting a new payment attempt", "Revalidating price, inventory and spending policy"]);
+    try {
+      const response = await fetch(`${GATEWAY_URL}/v1/transactions/${transaction.id}/retry-payment`, { method: "POST" });
+      const body = await response.json() as { transaction?: Transaction; error?: string };
+      if (!response.ok || !body.transaction) throw new Error(body.error ?? "Unable to start a payment retry.");
+      setTransaction(body.transaction); setActivity((current) => [...current, "New transaction created", "Original failed attempt preserved in the audit trail"]);
+      if (body.transaction.state === "policy_authorized") { setStage("authorized"); setActivity((current) => [...current, "Policy approved the new attempt"]); }
+      else setStage("blocked");
+    } catch (caught) { setStage("ready"); setError(caught instanceof Error ? caught.message : "Payment retry failed."); }
   }
 
   function launchRazorpay() {
@@ -106,13 +102,14 @@ export default function BuyerWorkspace() {
           <button className="run-button" onClick={() => void runAgent()} disabled={stage === "working" || !request.trim()}>{stage === "working" ? "Evaluating…" : "Evaluate purchase"}<span>→</span></button>
           {transaction?.state === "policy_authorized" && !checkout ? <button className="pay-button" onClick={() => void prepareRazorpayCheckout()}>Create Razorpay Test Order <span>→</span></button> : null}
           {checkout && stage === "payment" ? <button className="pay-button pay-ready" onClick={launchRazorpay}>Open Razorpay Test Checkout <span>↗</span></button> : null}
+          {paymentFailed ? <button className="pay-button" onClick={() => void retryPayment()}>Try payment again <span>↻</span></button> : null}
           {error ? <div className="error-box">{error}</div> : null}
           <div className="workspace-footer"><span>Merchant: Mandate Market</span><span>Payment authority: gateway only</span></div>
         </section>
-
         <section className="decision-column">
           <div className="decision-header"><div><span className={`status status-${stage}`}>{statusLabel}</span><span className="decision-label">Current transaction</span></div>{transaction ? <code>{transaction.id}</code> : <span className="quiet">No transaction yet</span>}</div>
           {blockedBySpend ? <div className="block-banner"><div><span className="block-eyebrow">POLICY GATE</span><strong>Purchase stopped before Razorpay</strong><span>The verified checkout total exceeds the user's hard spending limit.</span></div><span className="block-badge">NO ORDER CREATED</span></div> : null}
+          {paymentFailed ? <div className="block-banner failure-banner"><div><span className="block-eyebrow">PAYMENT RECOVERY</span><strong>Payment attempt failed</strong><span>No merchant order was created. Retry creates a new transaction and re-runs the policy gate.</span></div><span className="block-badge">SAFE TO RETRY</span></div> : null}
           <div className="product-panel"><span className="panel-kicker">SELECTED PRODUCT</span>{product ? <><div className="product-main"><div><h2>{product.name}</h2><p>{product.shortDescription}</p></div><strong>{money(selectedAmount)}</strong></div><div className="feature-list">{product.features.slice(0, 4).map((feature) => <span key={feature}>✓ {feature}</span>)}</div>{plan ? <div className="model-reason"><span>BUYER MODEL</span><p>{plan.decisionSummary}</p></div> : null}</> : <div className="empty-selection"><span>—</span><p>Run the buyer to see a live product decision.</p></div>}</div>
           <div className="policy-panel"><div className="panel-heading"><span className="panel-kicker">POLICY</span><span>{remaining ? `${money(remaining)} remaining` : selectedAmount ? "Limit reached" : "Awaiting evaluation"}</span></div><div className="policy-grid"><div><span>Maximum spend</span><strong>{money(maxSpend * 100)}</strong></div><div><span>Transaction</span><strong>{selectedAmount ? money(selectedAmount) : "—"}</strong></div></div><div className="check-list">{transaction?.policy?.checks.map((check) => <div className="check-row" key={check.rule}><span className={`check ${check.result === "PASS" ? "pass" : "fail"}`}>{check.result === "PASS" ? "✓" : "×"}</span><div><strong>{check.rule.replaceAll("_", " ")}</strong><small>{check.reason}</small></div><code>{check.observed}</code></div>) ?? <div className="check-placeholder">Policy checks appear here after gateway revalidation.</div>}</div></div>
           {transaction?.state === "policy_blocked" ? <div className="error-box"><strong>Payment not initiated.</strong><br />The policy engine stopped this purchase before a Razorpay Order was created.</div> : null}
