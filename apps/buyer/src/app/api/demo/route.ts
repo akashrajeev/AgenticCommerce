@@ -31,7 +31,8 @@ export async function GET() {
     checks.push({ key: "manifest", label: "Agent manifest", ok: manifest.ok && Boolean(manifestBody?.merchantId), detail: manifestBody?.merchantId ? `${manifestBody.merchantId} · v${manifestBody.version ?? "?"}` : `HTTP ${manifest.status}` });
     const txBody = transactions.ok ? await transactions.json().catch(() => null) as { transactions?: unknown[] } | null : null;
     const orderBody = orders.ok ? await orders.json().catch(() => null) as { orders?: unknown[]; revenue?: { realizedIncrementalRevenuePaise?: number } } | null : null;
-    const mcpBody = mcpHealth.ok ? await mcpHealth.json().catch(() => null) as { app?: string; transport?: string; protocolVersions?: string[] } | null : null;
+    const mcpBody = mcpHealth.ok ? await mcpHealth.json().catch(() => null) as { app?: string; transport?: string; protocolVersions?: string[]; razorpayTestMode?: boolean } | null : null;
+    checks.push({ key: "razorpay-test-mode", label: "Razorpay Test Mode", ok: mcpHealth.ok && mcpBody?.razorpayTestMode === true, detail: mcpBody?.razorpayTestMode === true ? "rzp_test_* key gate active" : "Test Mode key gate is not active" });
     checks.push({ key: "transaction-store", label: "Transaction store", ok: transactions.ok, detail: `${txBody?.transactions?.length ?? 0} visible transaction(s)` });
     checks.push({ key: "revenue-store", label: "Revenue attribution", ok: orders.ok, detail: `${orderBody?.orders?.length ?? 0} persisted merchant order(s)` });
     checks.push({ key: "mcp", label: "MANDATE MCP facade", ok: mcpHealth.ok && mcpBody?.app === "mandate-mcp", detail: mcpBody?.transport ? `${mcpBody.transport} · ${mcpBody.protocolVersions?.join(", ") ?? "no versions"}` : `HTTP ${mcpHealth.status}` });
