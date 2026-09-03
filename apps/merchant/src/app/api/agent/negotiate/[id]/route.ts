@@ -1,4 +1,4 @@
-import { getStoredNegotiation } from "../../../../lib/agent-negotiation";
+import { getStoredNegotiation } from "../../../../../lib/agent-negotiation";
 
 const headers = {
   "access-control-allow-origin": "*",
