@@ -21,10 +21,11 @@ export async function GET(request: Request) {
   const recommendations = getRevenueRecommendations(source.id, maxSpendPaise);
   const generatedAt = new Date().toISOString();
   const opportunities = recommendations.map((recommendation) => {
-    const bundleQuote = buildMultiLineQuote([
-      { productId: source.id, quantity: 1 },
-      { productId: recommendation.productId, quantity: 1 },
-    ]);
+    const bundleItems = recommendation.type === "UPSELL"
+      ? [{ productId: recommendation.productId, quantity: 1 }]
+      : [{ productId: source.id, quantity: 1 }, { productId: recommendation.productId, quantity: 1 }];
+    const bundleQuote = buildMultiLineQuote(bundleItems);
+    const incrementalRevenuePaise = Math.max(bundleQuote.subtotalPaise - sourceQuote.subtotalPaise, 0);
     const budgetFit = maxSpendPaise === undefined || bundleQuote.totalPaise <= maxSpendPaise;
     return {
       opportunityId: `grow_${crypto.randomUUID().replaceAll("-", "").slice(0, 18)}`,
@@ -34,7 +35,7 @@ export async function GET(request: Request) {
       type: recommendation.type,
       score: recommendation.score,
       rationale: recommendation.rationale,
-      incrementalRevenue: { currency: "INR" as const, amountPaise: recommendation.incrementalRevenuePaise },
+      incrementalRevenue: { currency: "INR" as const, amountPaise: incrementalRevenuePaise },
       projectedBasket: { currency: "INR" as const, amountPaise: bundleQuote.totalPaise },
       budgetFit,
       sourceQuoteId: sourceQuote.quoteId,
