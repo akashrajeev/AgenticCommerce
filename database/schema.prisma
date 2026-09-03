@@ -49,6 +49,20 @@ model WebhookEvent {
   @@map("webhook_events")
 }
 
+model NegotiationSession {
+  negotiationId     String   @id @map("negotiation_id")
+  intent            Json
+  merchant          Json
+  offers            Json
+  offerAttestations Json?    @map("offer_attestations")
+  turns             Json
+  createdAt         DateTime @map("created_at")
+  expiresAt         DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("negotiation_sessions")
+}
+
 model NegotiationAcceptance {
   key             String   @id
   negotiationId   String   @map("negotiation_id")
