@@ -10,7 +10,8 @@
     "start": "node dist/server.js",
     "typecheck": "prisma generate --config ../../prisma.config.ts && tsc -p tsconfig.json --noEmit",
     "test": "tsx --test src/*.test.ts",
-    "prisma:generate": "prisma generate --config ../../prisma.config.ts"
+    "prisma:generate": "prisma generate --config ../../prisma.config.ts",
+    "postinstall": "prisma generate --config ../../prisma.config.ts"
   },
   "dependencies": {
     "@mandate/shared": "0.1.0",

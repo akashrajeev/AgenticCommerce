@@ -11,7 +11,7 @@ import type {
   TransactionState,
 } from "@mandate/types";
 import { config } from "./config.js";
-import { saveAuditEvent, saveTransaction } from "./persistence.js";
+import { saveAuditEvent, saveTransaction } from "./persistence-prisma.js";
 
 type PurchaseIntentInput = Omit<PurchaseIntent, "id">;
 type MerchantSnapshot = {
