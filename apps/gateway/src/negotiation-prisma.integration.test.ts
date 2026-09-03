@@ -3,7 +3,9 @@ import test from "node:test";
 import type { MerchantOffer } from "@mandate/types";
 import { closePrisma, getPrisma } from "./prisma.js";
 import {
+  claimNegotiationAcceptance,
   loadNegotiationAcceptances,
+  releaseNegotiationAcceptanceClaim,
   saveNegotiationAcceptance,
   type PersistedNegotiationAcceptance,
 } from "./persistence-prisma.js";
@@ -54,6 +56,18 @@ test("persists negotiated acceptance idempotency state through Prisma", { skip: 
     assert.equal(hydrated.offer.quoteId, offer.quoteId);
   } finally {
     await prisma.negotiationAcceptance.deleteMany({ where: { key } });
+  }
+
+  const claimKey = `it_claim_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
+  try {
+    const results = await Promise.all([
+      claimNegotiationAcceptance({ key: claimKey, negotiationId: "neg_concurrent", mandateId: "mandate_concurrent", offerId: "offer_concurrent" }),
+      claimNegotiationAcceptance({ key: claimKey, negotiationId: "neg_concurrent", mandateId: "mandate_concurrent", offerId: "offer_concurrent" }),
+    ]);
+    assert.equal(results.filter(Boolean).length, 1);
+    assert.equal(results.filter((value) => !value).length, 1);
+  } finally {
+    await releaseNegotiationAcceptanceClaim(claimKey);
     await closePrisma();
   }
 });
