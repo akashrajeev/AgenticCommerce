@@ -1,4 +1,4 @@
-import type { AuditEvent, Transaction } from "@mandate/types";
+import type { AuditEvent, MerchantOffer, Transaction } from "@mandate/types";
 import { getPrisma } from "./prisma.js";
 import {
   claimWebhookEvent as claimWebhookEventSql,
@@ -10,6 +10,17 @@ import {
 function jsonValue<T>(value: T) {
   return JSON.parse(JSON.stringify(value));
 }
+
+export type PersistedNegotiationAcceptance = {
+  key: string;
+  negotiationId: string;
+  mandateId: string;
+  offer: MerchantOffer;
+  transactionId: string;
+  executionId: string;
+  authorizationId: string;
+  createdAt: string;
+};
 
 export async function saveTransaction(transaction: Transaction): Promise<void> {
   const prisma = await getPrisma();
@@ -86,4 +97,44 @@ export async function releaseWebhookEvent(dedupeKey: string): Promise<void> {
   const prisma = await getPrisma();
   if (!prisma) return releaseWebhookEventSql(dedupeKey);
   await prisma.webhookEvent.deleteMany({ where: { dedupeKey } });
+}
+
+export async function saveNegotiationAcceptance(input: PersistedNegotiationAcceptance): Promise<void> {
+  const prisma = await getPrisma();
+  if (!prisma) return;
+  await prisma.negotiationAcceptance.upsert({
+    where: { key: input.key },
+    create: {
+      key: input.key,
+      negotiationId: input.negotiationId,
+      mandateId: input.mandateId,
+      offer: jsonValue(input.offer),
+      transactionId: input.transactionId,
+      executionId: input.executionId,
+      authorizationId: input.authorizationId,
+      createdAt: new Date(input.createdAt),
+    },
+    update: {
+      offer: jsonValue(input.offer),
+      transactionId: input.transactionId,
+      executionId: input.executionId,
+      authorizationId: input.authorizationId,
+    },
+  });
+}
+
+export async function loadNegotiationAcceptances(): Promise<PersistedNegotiationAcceptance[]> {
+  const prisma = await getPrisma();
+  if (!prisma) return [];
+  const rows = await prisma.negotiationAcceptance.findMany({ orderBy: { createdAt: "asc" } });
+  return rows.map((row) => ({
+    key: row.key,
+    negotiationId: row.negotiationId,
+    mandateId: row.mandateId,
+    offer: row.offer as unknown as MerchantOffer,
+    transactionId: row.transactionId,
+    executionId: row.executionId,
+    authorizationId: row.authorizationId,
+    createdAt: row.createdAt.toISOString(),
+  }));
 }
