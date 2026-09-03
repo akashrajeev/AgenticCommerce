@@ -95,6 +95,17 @@ export type UserMandate = {
   expiresAt: string;
 };
 
+export type MandateCredential = {
+  algorithm: "Ed25519";
+  keyId?: string;
+  publicKeyPem: string;
+  signatureBase64: string;
+};
+
+export type SignedUserMandate = UserMandate & {
+  credential: MandateCredential;
+};
+
 export type CheckoutMandate = {
   mandateId: string;
   checkoutId: string;
