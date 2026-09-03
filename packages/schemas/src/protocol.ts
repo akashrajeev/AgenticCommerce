@@ -85,6 +85,7 @@ export const checkoutSessionSchema = z.object({
   status: z.enum(["open", "authorized", "completed", "cancelled", "expired"]),
   version: z.number().int().positive(),
   snapshot: checkoutSnapshotSchema,
+  createdAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
 });
 
