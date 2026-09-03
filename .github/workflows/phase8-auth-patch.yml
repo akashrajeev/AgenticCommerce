@@ -9,11 +9,11 @@ permissions:
 
 jobs:
   patch:
-    if: hashFiles('.phase8-auth-trigger') != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Apply tenant scoped mandate boundary
+        if: contains(github.event.head_commit.message, 'stage tenant auth route patch')
         run: |
           python3 - <<'PY'
           from pathlib import Path
