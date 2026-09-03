@@ -1,3 +1,5 @@
+import type { CheckoutLineItem, MoneyAmount } from "./index.js";
+
 export type CommerceProtocol = "mandate-native" | "acp" | "ap2" | "uap" | "x402";
 
 export type AgentType = "buyer" | "merchant" | "service";
@@ -162,11 +164,6 @@ export type CheckoutBindingInput = {
   totalPaise: number;
   lineItems: CheckoutLineItem[];
   expiresAt: string;
-};
-
-export type MoneyAmount = {
-  currency: "INR";
-  amountPaise: number;
 };
 
 export function canonicalizeCheckoutBinding(input: CheckoutBindingInput): string {
