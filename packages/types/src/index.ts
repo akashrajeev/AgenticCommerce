@@ -40,6 +40,7 @@ export type MerchantManifest = {
     inventory: boolean;
     checkoutPreview: boolean;
     agentCheckout: boolean;
+    revenueRecommendations: boolean;
     payment: "razorpay";
   };
   endpoints: {
@@ -47,6 +48,7 @@ export type MerchantManifest = {
     product: string;
     inventory: string;
     checkoutPreview: string;
+    revenueRecommendations: string;
   };
 };
 
