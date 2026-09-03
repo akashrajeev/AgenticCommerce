@@ -22,7 +22,7 @@ test("blocks amounts above the verified per-transaction limit", () => {
     subjectId: "user_001",
     agentId: "ai-profile-001",
     merchantId: "mandate-market",
-    amountPaise: 5_001,
+    amountPaise: 500_001,
     monthlyUsedPaise: 0,
     paymentContext: "domestic-p2m",
     explicitUserAction: true,
