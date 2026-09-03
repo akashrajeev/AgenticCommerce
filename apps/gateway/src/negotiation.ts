@@ -17,12 +17,31 @@ type MerchantQuoteResponse = {
   };
 };
 
+type MerchantNegotiationResponse = {
+  negotiationId: string;
+  offers: MerchantOffer[];
+};
+
 function sameItems(a: CheckoutLineItem[], b: CheckoutLineItem[]): boolean {
   if (a.length !== b.length) return false;
   const normalize = (items: CheckoutLineItem[]) => [...items]
     .map((item) => `${item.productId}:${item.quantity}:${item.unitPricePaise}:${item.lineTotalPaise}`)
     .sort();
   return normalize(a).join("|") === normalize(b).join("|");
+}
+
+async function fetchMerchantOfferAttestation(negotiationId: string, offer: MerchantOffer) {
+  const response = await fetch(`${config.merchantInternalUrl}/api/agent/negotiate/${encodeURIComponent(negotiationId)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error("NEGOTIATION_NOT_FOUND");
+  const body = await response.json().catch(() => null) as MerchantNegotiationResponse | null;
+  if (!body || body.negotiationId !== negotiationId) throw new Error("NEGOTIATION_NOT_FOUND");
+  const issued = body.offers.find((candidate) => candidate.offerId === offer.offerId);
+  if (!issued) throw new Error("NEGOTIATED_OFFER_NOT_ISSUED");
+  if (issued.intentId !== offer.intentId || issued.merchantId !== offer.merchantId || issued.quoteId !== offer.quoteId) throw new Error("NEGOTIATED_OFFER_ATTESTATION_MISMATCH");
+  if (issued.amount.currency !== offer.amount.currency || issued.amount.amountPaise !== offer.amount.amountPaise) throw new Error("NEGOTIATED_OFFER_ATTESTATION_MISMATCH");
+  if (issued.sourceProtocol !== offer.sourceProtocol || issued.expiresAt !== offer.expiresAt) throw new Error("NEGOTIATED_OFFER_ATTESTATION_MISMATCH");
+  if (!sameItems(issued.items, offer.items)) throw new Error("NEGOTIATED_OFFER_ATTESTATION_MISMATCH");
+  return issued;
 }
 
 async function fetchAuthoritativeQuote(offer: MerchantOffer) {
@@ -53,9 +72,10 @@ export async function acceptNegotiatedOffer(input: { negotiationId: string; mand
   if (!input.offer.items.length) throw new Error("INVALID_NEGOTIATED_OFFER_ITEMS");
   if (input.offer.items.some((item) => item.lineTotalPaise !== item.unitPricePaise * item.quantity)) throw new Error("INVALID_NEGOTIATED_OFFER_LINE");
 
-  const quote = await fetchAuthoritativeQuote(input.offer);
-  const expiresAt = new Date(Math.min(new Date(input.offer.expiresAt).getTime(), new Date(quote.expiresAt).getTime())).toISOString();
-  const checkoutId = `neg_${input.negotiationId}_${input.offer.offerId}`;
+  const issued = await fetchMerchantOfferAttestation(input.negotiationId, input.offer);
+  const quote = await fetchAuthoritativeQuote(issued);
+  const expiresAt = new Date(Math.min(new Date(issued.expiresAt).getTime(), new Date(quote.expiresAt).getTime())).toISOString();
+  const checkoutId = `neg_${input.negotiationId}_${issued.offerId}`;
   const binding = { checkoutId, merchantId: quote.merchantId, quoteId: quote.quoteId, currency: quote.currency, totalPaise: quote.totalPaise, lineItems: quote.lineItems, expiresAt };
   const cartHash = createHash("sha256").update(canonicalizeCheckoutBinding(binding)).digest("hex");
   const result = await executeDelegatedMandate(input.mandateId, { ...binding, cartHash });
@@ -64,7 +84,7 @@ export async function acceptNegotiatedOffer(input: { negotiationId: string; mand
     transactionId: result.authorization.transaction.id,
     executionId: result.execution.executionId,
     authorizationId: result.authorization.authorization.authorizationId,
-    offer: input.offer,
+    offer: issued,
     transaction: result.authorization.transaction,
     authorization: result.authorization.authorization,
     mandate: delegatedMandateStats(input.mandateId),
