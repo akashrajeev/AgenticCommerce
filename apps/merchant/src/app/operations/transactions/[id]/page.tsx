@@ -38,9 +38,16 @@ export default async function TransactionDetailPage({ params }: { params: Promis
     return <main className="ops-page"><div className="ops-container"><p className="eyebrow">Transaction</p><h1>Not found</h1><Link href="/operations">← Back to transactions</Link></div></main>;
   }
 
-  const intent = transaction.intent as { reason?: string; productId?: string; quantity?: number; maxSpendPaise?: number };
-  const quote = transaction.quote as { totalPaise?: number; currency?: string };
+  const intent = transaction.intent as { reason?: string; productId?: string; quantity?: number; maxSpendPaise?: number; lineItems?: Array<{ productId?: string; quantity?: number }> };
+  const quote = transaction.quote as { totalPaise?: number; currency?: string; lineItems?: Array<{ productId: string; quantity: number; unitPricePaise?: number; lineTotalPaise?: number }> };
   const policy = transaction.policy as { decision?: string; checks?: Array<Record<string, unknown>> } | undefined;
+  const basketLines = quote.lineItems?.length ? quote.lineItems : intent.lineItems?.length ? intent.lineItems : intent.productId ? [{ productId: intent.productId, quantity: intent.quantity ?? 1 }] : [];
+  const webhookEvents = events.filter((event) => String(event.action).startsWith("WEBHOOK_"));
+  const captured = transaction.state === "payment_captured" || transaction.state === "payment_verified" || transaction.state === "order_confirmed";
+  const basketTotal = typeof quote.totalPaise === "number" ? quote.totalPaise : 0;
+  const baseLine = basketLines.length ? basketLines[0] : undefined;
+  const baseLineTotal = typeof baseLine?.quantity === "number" && typeof quote.lineItems?.[0]?.unitPricePaise === "number" ? baseLine.quantity * quote.lineItems[0].unitPricePaise : typeof quote.lineItems?.[0]?.lineTotalPaise === "number" ? quote.lineItems[0].lineTotalPaise : 0;
+  const basketLift = Math.max(basketTotal - baseLineTotal, 0);
 
   return (
     <main className="ops-page">
@@ -61,19 +68,20 @@ export default async function TransactionDetailPage({ params }: { params: Promis
             <p className="eyebrow">Purchase intent</p>
             <h2>{intent.reason ?? "—"}</h2>
             <div className={styles.facts}>
-              <div className={styles.fact}><span>Product</span><strong>{intent.productId ?? "—"}</strong></div>
-              <div className={styles.fact}><span>Quantity</span><strong>{intent.quantity ?? "—"}</strong></div>
+              <div className={styles.fact}><span>Primary product</span><strong>{intent.productId ?? "—"}</strong></div>
+              <div className={styles.fact}><span>Basket lines</span><strong>{basketLines.length}</strong></div>
               <div className={styles.fact}><span>Maximum spend</span><strong>{typeof intent.maxSpendPaise === "number" ? money(intent.maxSpendPaise) : "—"}</strong></div>
-              <div className={styles.fact}><span>Quoted total</span><strong>{typeof quote.totalPaise === "number" ? money(quote.totalPaise) : "—"}</strong></div>
+              <div className={styles.fact}><span>Final quote</span><strong>{typeof quote.totalPaise === "number" ? money(quote.totalPaise) : "—"}</strong></div>
             </div>
           </div>
 
           <div className={styles.card}>
-            <p className="eyebrow">Payment references</p>
+            <p className="eyebrow">Razorpay payment rail</p>
             <dl className={styles.refList}>
-              <div><dt>Razorpay order</dt><dd>{String(transaction.razorpayOrderId ?? "Not created")}</dd></div>
+              <div><dt>Order</dt><dd>{String(transaction.razorpayOrderId ?? "Not created")}</dd></div>
               <div><dt>Payment</dt><dd>{String(transaction.razorpayPaymentId ?? "Not received")}</dd></div>
-              <div><dt>Currency</dt><dd>{String(quote.currency ?? "INR")}</dd></div>
+              <div><dt>Captured</dt><dd>{captured ? "Yes" : "No"}</dd></div>
+              <div><dt>Webhook evidence</dt><dd>{webhookEvents.length ? `${webhookEvents.length} event${webhookEvents.length === 1 ? "" : "s"}` : "Awaiting webhook"}</dd></div>
             </dl>
           </div>
 
@@ -83,6 +91,18 @@ export default async function TransactionDetailPage({ params }: { params: Promis
             <div className={styles.checks}>{policy?.checks?.map((check) => <div className={styles.check} key={String(check.rule)}><span>{String(check.result)}</span><strong>{String(check.rule).replaceAll("_", " ")}</strong></div>) ?? <span>Awaiting evaluation.</span>}</div>
           </div>
         </section>
+
+        {basketLines.length > 1 ? (
+          <section className={styles.card}>
+            <div className={styles.auditHeader}><div><p className="eyebrow">Approved basket</p><h2>Revenue expansion</h2></div><span>{money(basketLift)} incremental</span></div>
+            <div className={styles.facts}>
+              {basketLines.map((line) => (
+                <div className={styles.fact} key={String(line.productId)}><span>{String(line.productId)}</span><strong>× {line.quantity}</strong></div>
+              ))}
+            </div>
+            <p className="eyebrow">The additional lines were approved by the user before the gateway evaluated the combined quote.</p>
+          </section>
+        ) : null}
 
         <section className={`${styles.card} ${styles.audit}`}>
           <div className={styles.auditHeader}><div><p className="eyebrow">Audit trail</p><h2>Every transition, recorded.</h2></div><span>{events.length} events</span></div>
