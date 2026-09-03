@@ -5,6 +5,8 @@ export function GET() {
     headers: {
       "cache-control": "public, max-age=60",
       "access-control-allow-origin": "*",
+      link: "</api/agent/capabilities>; rel=\"agent-capabilities\"",
+      "x-agent-commerce-version": "1.0",
     },
   });
 }
