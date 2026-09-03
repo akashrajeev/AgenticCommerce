@@ -51,8 +51,8 @@ function evaluate(product: Product, quote: CheckoutQuote, input: Partial<Paramet
 
 async function withMerchantFetch(product: Product, quote: CheckoutQuote, fn: () => Promise<void>): Promise<void> {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url: string | URL) => {
-    const path = String(url);
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (path.includes("/api/agent/products/")) return new Response(JSON.stringify({ product }), { status: 200, headers: { "content-type": "application/json" } });
     if (path.includes("/api/agent/inventory/")) return new Response(JSON.stringify({ inventory: product.inventory }), { status: 200, headers: { "content-type": "application/json" } });
     if (path.includes("/api/agent/checkout/quotes/")) return new Response(JSON.stringify({ quote }), { status: 200, headers: { "content-type": "application/json" } });
