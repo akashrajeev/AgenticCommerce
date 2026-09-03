@@ -112,6 +112,7 @@ services:
       GATEWAY_INTERNAL_URL: http://gateway:4000
       MERCHANT_INTERNAL_URL: http://merchant:3000
       MCP_INTERNAL_URL: http://mcp:4100
+      MCP_AGENT_TOKEN: ${MCP_AGENT_TOKEN:-mandate-local-mcp}
     ports:
       - "3001:3001"
     depends_on:
