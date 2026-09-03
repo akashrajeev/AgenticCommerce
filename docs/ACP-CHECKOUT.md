@@ -241,17 +241,20 @@ The gateway also stores the resulting authorization artifact on the transaction 
 
 ## Replay protection
 
-A successful mandate authorization consumes its `(mandateId, nonce)` for the lifetime of the transaction record.
+A mandate nonce cannot authorize a different checkout. An exact retry of the same mandate + checkout binding returns the existing authorization so transport/retry failures do not create a second authorization.
 
 ```text
-same mandate + same nonce
+same mandate + same nonce + same checkout binding
+        → existing authorization / safe retry
+
+same mandate + same nonce + changed checkout binding
         → 409 MANDATE_NONCE_REPLAY
 
 new mandate / new nonce
         → eligible for fresh authorization
 ```
 
-The gateway additionally guards concurrent requests using an in-process nonce claim set, while persisted transaction state prevents replay after restart in the current single-gateway deployment model.
+The gateway also guards concurrent requests using an in-process nonce claim set. Persisted transaction state prevents replay after restart in the current single-gateway deployment model.
 
 ## Security properties
 
@@ -286,7 +289,8 @@ The gateway has regression coverage for:
 ✓ spend-limit rejection
 ✓ product allow-list rejection
 ✓ fresh merchant/policy revalidation
-✓ mandate nonce replay rejection
+✓ exact same-checkout authorization retry
+✓ different-checkout nonce replay rejection
 ✓ Razorpay signature boundary
 ✓ transaction binding of mandate authorization
 ```
