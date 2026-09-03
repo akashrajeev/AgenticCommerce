@@ -44,6 +44,11 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: Initialize PostgreSQL schema
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/init.sql
+        env:
+          DATABASE_URL: postgresql://mandate:mandate@localhost:5432/mandate
+
       - name: Prisma persistence smoke test
         run: npm run prisma:smoke -w @mandate/gateway
         env:
