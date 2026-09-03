@@ -57,19 +57,26 @@ function sameSecret(left: string, right: string): boolean {
   return timingSafeEqual(leftBytes, rightBytes);
 }
 
-export function requireTenantPrincipal(authorizationHeader?: string): TenantPrincipal | null {
-  if (!config.tenantAuthRequired) return null;
-
+export function authenticateTenantPrincipal(authorizationHeader: string | undefined, credentials: Map<string, TenantPrincipal>): TenantPrincipal {
   const header = authorizationHeader?.trim() ?? "";
   if (!header.startsWith("Bearer ")) throw new Error("TENANT_AUTH_REQUIRED");
   const token = header.slice("Bearer ".length).trim();
   if (!token) throw new Error("TENANT_AUTH_REQUIRED");
 
-  const credentials = parseTenantApiKeys(config.tenantApiKeysJson);
-  if (credentials.size === 0) throw new Error("TENANT_AUTH_NOT_CONFIGURED");
-
   for (const [apiKey, principal] of credentials) {
     if (sameSecret(token, apiKey)) return principal;
   }
   throw new Error("INVALID_TENANT_AUTH");
+}
+
+export function assertTenantOwnership(principal: TenantPrincipal, subjectId: string): void {
+  if (principal.subjectId !== subjectId) throw new Error("TENANT_OWNERSHIP_FORBIDDEN");
+}
+
+export function requireTenantPrincipal(authorizationHeader?: string): TenantPrincipal | null {
+  if (!config.tenantAuthRequired) return null;
+
+  const credentials = parseTenantApiKeys(config.tenantApiKeysJson);
+  if (credentials.size === 0) throw new Error("TENANT_AUTH_NOT_CONFIGURED");
+  return authenticateTenantPrincipal(authorizationHeader, credentials);
 }
