@@ -5,11 +5,17 @@ export const agentTypeSchema = z.enum(["buyer", "merchant", "service"]);
 export const mandateApprovalModeSchema = z.enum(["human_present", "delegated_autonomous"]);
 export const paymentAuthorizationStatusSchema = z.enum(["authorized", "declined", "consumed", "expired"]);
 export const paymentReceiptStatusSchema = z.enum(["authorized", "captured", "failed", "refunded"]);
+export const delegatedMandateStatusSchema = z.enum(["active", "revoked", "expired", "exhausted"]);
+export const delegatedMandateExecutionStatusSchema = z.enum(["reserved", "confirmed", "released"]);
 
 const metadataSchema = z.record(z.union([z.string(), z.number(), z.boolean(), z.null()]));
 const moneySchema = z.object({
   currency: z.literal("INR"),
   amountPaise: z.number().int().nonnegative(),
+});
+const positiveMoneySchema = z.object({
+  currency: z.literal("INR"),
+  amountPaise: z.number().int().positive(),
 });
 
 export const agentIdentitySchema = z.object({
@@ -104,6 +110,36 @@ export const userMandateSchema = z.object({
   expiresAt: z.string().datetime(),
 });
 
+export const delegatedMandateSchema = z.object({
+  mandateId: z.string().min(1),
+  subjectId: z.string().min(1),
+  agentId: z.string().min(1),
+  purpose: z.string().min(1).max(500),
+  merchantIds: z.array(z.string().min(1)).max(100),
+  allowedProductIds: z.array(z.string().min(1)).max(100).optional(),
+  maxSpendPerPurchase: positiveMoneySchema,
+  totalBudget: positiveMoneySchema,
+  spentPaise: z.number().int().nonnegative(),
+  reservedPaise: z.number().int().nonnegative(),
+  executionCount: z.number().int().nonnegative(),
+  blockedCount: z.number().int().nonnegative(),
+  approvalMode: z.literal("delegated_autonomous"),
+  constraints: metadataSchema,
+  nonce: z.string().min(16),
+  issuedAt: z.string().datetime(),
+  expiresAt: z.string().datetime(),
+  status: delegatedMandateStatusSchema,
+});
+
+export const delegatedMandateExecutionSchema = z.object({
+  executionId: z.string().min(1),
+  mandateId: z.string().min(1),
+  transactionId: z.string().min(1),
+  amount: positiveMoneySchema,
+  status: delegatedMandateExecutionStatusSchema,
+  createdAt: z.string().datetime(),
+});
+
 export const mandateCredentialSchema = z.object({
   algorithm: z.literal("Ed25519"),
   keyId: z.string().min(1).optional(),
@@ -185,6 +221,8 @@ export type MerchantOfferInput = z.infer<typeof merchantOfferSchema>;
 export type CheckoutSessionInput = z.infer<typeof checkoutSessionSchema>;
 export type UserMandateInput = z.infer<typeof userMandateSchema>;
 export type SignedUserMandateInput = z.infer<typeof signedUserMandateSchema>;
+export type DelegatedMandateInput = z.infer<typeof delegatedMandateSchema>;
+export type DelegatedMandateExecutionInput = z.infer<typeof delegatedMandateExecutionSchema>;
 export type CheckoutMandateInput = z.infer<typeof checkoutMandateSchema>;
 export type PaymentMandateInput = z.infer<typeof paymentMandateSchema>;
 export type PaymentAuthorizationInput = z.infer<typeof paymentAuthorizationSchema>;
