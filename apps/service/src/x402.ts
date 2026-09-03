@@ -26,22 +26,8 @@ export type X402PaymentPayload = {
   extensions?: Record<string, unknown>;
 };
 
-export type X402VerifyResponse = {
-  isValid: boolean;
-  invalidReason?: string;
-  payer?: string;
-  extra?: Record<string, unknown>;
-};
-
-export type X402SettlementResponse = {
-  success: boolean;
-  errorReason?: string;
-  payer?: string;
-  transaction: string;
-  network: string;
-  amount?: string;
-  extensions?: Record<string, unknown>;
-};
+export type X402VerifyResponse = { isValid: boolean; invalidReason?: string; payer?: string; extra?: Record<string, unknown> };
+export type X402SettlementResponse = { success: boolean; errorReason?: string; payer?: string; transaction: string; network: string; amount?: string; extensions?: Record<string, unknown> };
 
 export type X402ServiceMandate = {
   version: 1;
@@ -70,9 +56,11 @@ function canonicalUnsignedMandate(mandate: X402ServiceMandate): string {
   return JSON.stringify(stableValue(unsigned));
 }
 
-export function encodeBase64Json(value: unknown): string {
-  return Buffer.from(JSON.stringify(value), "utf8").toString("base64");
+function replayKey(mandate: X402ServiceMandate, expected: X402PaymentRequirements): string {
+  return `${mandate.mandateId}:${mandate.nonce}:${expected.amount}:${expected.network}:${expected.asset}:${expected.payTo}`;
 }
+
+export function encodeBase64Json(value: unknown): string { return Buffer.from(JSON.stringify(value), "utf8").toString("base64"); }
 
 export function decodeBase64Json<T>(value: string): T {
   if (!value || !/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) throw new Error("INVALID_BASE64_JSON");
@@ -98,12 +86,13 @@ export function paymentRequirementMatches(selected: X402PaymentRequirements, exp
 
 const consumedMandates = new Set<string>();
 
-export function verifyX402ServiceMandate(mandate: X402ServiceMandate, expected: X402PaymentRequirements, serviceId: string, now = Date.now()): void {
+export function validateX402ServiceMandate(mandate: X402ServiceMandate, expected: X402PaymentRequirements, serviceId: string, now = Date.now()): void {
   if (mandate.version !== 1) throw new Error("UNSUPPORTED_X402_MANDATE");
   if (!mandate.mandateId.trim() || !mandate.subjectId.trim() || !mandate.agentId.trim() || mandate.serviceId !== serviceId) throw new Error("X402_MANDATE_SCOPE_MISMATCH");
   if (mandate.network !== expected.network || mandate.asset !== expected.asset || mandate.payTo !== expected.payTo) throw new Error("X402_MANDATE_PAYMENT_MISMATCH");
-  const maxAmount = BigInt(mandate.maxAmountAtomic);
-  const requiredAmount = BigInt(expected.amount);
+  let maxAmount: bigint;
+  let requiredAmount: bigint;
+  try { maxAmount = BigInt(mandate.maxAmountAtomic); requiredAmount = BigInt(expected.amount); } catch { throw new Error("X402_MANDATE_AMOUNT_INVALID"); }
   if (maxAmount < requiredAmount) throw new Error("X402_MANDATE_LIMIT_EXCEEDED");
   const expires = Date.parse(mandate.expiresAt);
   if (!Number.isFinite(expires) || expires <= now) throw new Error("X402_MANDATE_EXPIRED");
@@ -114,11 +103,10 @@ export function verifyX402ServiceMandate(mandate: X402ServiceMandate, expected: 
   try { signature = Buffer.from(mandate.signatureBase64, "base64"); } catch { throw new Error("X402_MANDATE_SIGNATURE_INVALID"); }
   if (signature.length !== 64) throw new Error("X402_MANDATE_SIGNATURE_INVALID");
   if (!verify(null, Buffer.from(canonicalUnsignedMandate(mandate), "utf8"), publicKey, signature)) throw new Error("X402_MANDATE_SIGNATURE_INVALID");
-  const replayKey = `${mandate.mandateId}:${mandate.nonce}:${expected.amount}:${expected.network}:${expected.asset}:${expected.payTo}`;
-  if (consumedMandates.has(replayKey)) throw new Error("X402_MANDATE_REPLAY");
-  consumedMandates.add(replayKey);
+  if (consumedMandates.has(replayKey(mandate, expected))) throw new Error("X402_MANDATE_REPLAY");
 }
 
+export function consumeX402ServiceMandate(mandate: X402ServiceMandate, expected: X402PaymentRequirements): void { consumedMandates.add(replayKey(mandate, expected)); }
 export function clearX402MandateReplayStore(): void { consumedMandates.clear(); }
 
 export async function facilitatorVerify(baseUrl: string, paymentPayload: X402PaymentPayload, paymentRequirements: X402PaymentRequirements): Promise<X402VerifyResponse> {
