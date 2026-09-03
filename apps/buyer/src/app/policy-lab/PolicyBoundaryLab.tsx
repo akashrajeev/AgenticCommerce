@@ -7,7 +7,8 @@ const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:400
 const basket = [
   { id: "hp-001", name: "SoundMax Pro", pricePaise: 399900 },
   { id: "ms-001", name: "Arc Precision Mouse", pricePaise: 249900 },
-];
+] as const;
+const primaryProduct = basket[0];
 
 function money(paise: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(paise / 100);
@@ -51,7 +52,7 @@ export default function PolicyBoundaryLab() {
   }
 
   const quoteTotal = result?.quote.totalPaise ?? 0;
-  const uplift = Math.max(quoteTotal - basket[0].pricePaise, 0);
+  const uplift = Math.max(quoteTotal - primaryProduct.pricePaise, 0);
   const blocked = result?.scenario === "BLOCKED";
   const limit = blocked ? 500000 : 800000;
 
