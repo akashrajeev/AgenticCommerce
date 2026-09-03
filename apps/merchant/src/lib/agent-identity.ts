@@ -1,5 +1,4 @@
-import { generateKeyPairSync, privateDecrypt, sign } from "node:crypto";
-import { config } from "./config";
+import { createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
 
 export type MerchantAgentCredential = {
   algorithm: "Ed25519";
@@ -10,30 +9,42 @@ export type MerchantAgentCredential = {
   publicKeyPem: string;
 };
 
-let cached: { privateKeyPem: string; credential: MerchantAgentCredential } | null = null;
+type MerchantAgentIdentity = {
+  privateKey: ReturnType<typeof createPrivateKey>;
+  credential: MerchantAgentCredential;
+};
 
-function buildIdentity() {
+let cached: MerchantAgentIdentity | null = null;
+
+function buildIdentity(): MerchantAgentIdentity {
   if (cached) return cached;
   const merchantId = "mandate-market";
   const agentId = "merchant-agent:mandate-market";
   const issuer = merchantId;
-  const privateKeyPem = config.merchantAgentPrivateKeyPem.trim();
-  const keyId = config.merchantAgentKeyId.trim() || "merchant-agent-ed25519-1";
+  const keyId = process.env.MERCHANT_AGENT_KEY_ID?.trim() || "merchant-agent-ed25519-1";
+  const configuredKey = process.env.MERCHANT_AGENT_PRIVATE_KEY_B64?.trim() || "";
 
-  if (privateKeyPem) {
-    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-    void privateKey;
-    void publicKey;
-    throw new Error("MERCHANT_AGENT_PRIVATE_KEY_CONFIGURATION_UNSUPPORTED");
+  if (!configuredKey && process.env.NODE_ENV === "production") throw new Error("MERCHANT_AGENT_PRIVATE_KEY_REQUIRED");
+
+  let privateKey: ReturnType<typeof createPrivateKey>;
+  if (configuredKey) {
+    try {
+      privateKey = createPrivateKey({
+        key: Buffer.from(configuredKey, "base64").toString("utf8"),
+        format: "pem",
+        type: "pkcs8",
+      });
+    } catch {
+      throw new Error("INVALID_MERCHANT_AGENT_PRIVATE_KEY");
+    }
+  } else {
+    privateKey = generateKeyPairSync("ed25519").privateKey;
   }
 
-  if (process.env.NODE_ENV === "production") throw new Error("MERCHANT_AGENT_PRIVATE_KEY_REQUIRED");
-  const generated = generateKeyPairSync("ed25519");
-  const privatePem = generated.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
-  const publicPem = generated.publicKey.export({ format: "pem", type: "spki" }).toString();
+  const publicKeyPem = createPublicKey(privateKey).export({ format: "pem", type: "spki" }).toString();
   cached = {
-    privateKeyPem: privatePem,
-    credential: { algorithm: "Ed25519", keyId, merchantId, agentId, issuer, publicKeyPem: publicPem },
+    privateKey,
+    credential: { algorithm: "Ed25519", keyId, merchantId, agentId, issuer, publicKeyPem },
   };
   return cached;
 }
@@ -41,7 +52,11 @@ function buildIdentity() {
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, stableValue(entry)]));
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, stableValue(entry)]),
+    );
   }
   return value;
 }
@@ -57,6 +72,6 @@ export function getMerchantAgentCredential(): MerchantAgentCredential {
 export function signMerchantOffer(offer: unknown): { credential: MerchantAgentCredential; signatureBase64: string } {
   const identity = buildIdentity();
   const payload = Buffer.from(canonicalizeMerchantOfferAttestation({ offer, credential: identity.credential }), "utf8");
-  const signature = sign(null, payload, identity.privateKeyPem);
+  const signature = sign(null, payload, identity.privateKey);
   return { credential: identity.credential, signatureBase64: signature.toString("base64") };
 }
