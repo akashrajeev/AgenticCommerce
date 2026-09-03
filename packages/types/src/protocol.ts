@@ -143,6 +143,7 @@ export type PaymentAuthorization = {
   status: PaymentAuthorizationStatus;
   createdAt: string;
   expiresAt: string;
+  nonce: string;
 };
 
 export type PaymentReceiptStatus = "authorized" | "captured" | "failed" | "refunded";
