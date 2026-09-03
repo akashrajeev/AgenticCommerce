@@ -12,7 +12,12 @@ import type {
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { config } from "./config.js";
 import { verifySignedUserMandate } from "./mandate-credentials.js";
-import { addMandateAuthorizationAudit, proposeTransaction } from "./transaction-core.js";
+import {
+  addMandateAuthorizationAudit,
+  attachMandateAuthorization,
+  findTransactionByMandateNonce,
+  proposeTransaction,
+} from "./transaction-core.js";
 
 export type MandateCheckoutBindingInput = CheckoutBindingInput & {
   cartHash: string;
@@ -48,7 +53,9 @@ function nowIso(): string {
 }
 
 function mandateExpiry(userMandate: UserMandate, checkout: CheckoutBindingInput): string {
-  return new Date(Math.min(assertSafeTime(userMandate.expiresAt, "expiry"), assertSafeTime(checkout.expiresAt, "checkout_expiry"))).toISOString();
+  return new Date(
+    Math.min(assertSafeTime(userMandate.expiresAt, "expiry"), assertSafeTime(checkout.expiresAt, "checkout_expiry")),
+  ).toISOString();
 }
 
 function checkoutCartHash(checkout: CheckoutBindingInput): string {
@@ -64,8 +71,11 @@ function validateMandateShape(userMandate: UserMandate, checkout: MandateCheckou
   const issuedAt = assertSafeTime(userMandate.issuedAt, "issued_at");
   const mandateExpiresAt = assertSafeTime(userMandate.expiresAt, "expiry");
   const checkoutExpiresAt = assertSafeTime(checkout.expiresAt, "checkout_expiry");
+
   if (!userMandate.mandateId || !userMandate.subjectId || !userMandate.agentId) throw new Error("INVALID_MANDATE_IDENTITY");
   if (!userMandate.purpose.trim()) throw new Error("INVALID_MANDATE_PURPOSE");
+  if (!userMandate.nonce.trim() || userMandate.nonce.length > 255) throw new Error("INVALID_MANDATE_NONCE");
+  if (!Number.isSafeInteger(userMandate.maxSpend.amountPaise) || userMandate.maxSpend.amountPaise < 0) throw new Error("INVALID_MANDATE_SPEND_LIMIT");
   if (issuedAt > now + 5_000) throw new Error("MANDATE_NOT_YET_VALID");
   if (mandateExpiresAt <= now) throw new Error("MANDATE_EXPIRED");
   if (checkoutExpiresAt <= now) throw new Error("CHECKOUT_BINDING_EXPIRED");
@@ -74,17 +84,37 @@ function validateMandateShape(userMandate: UserMandate, checkout: MandateCheckou
   if (userMandate.maxSpend.amountPaise < checkout.totalPaise) throw new Error("MANDATE_SPEND_LIMIT_EXCEEDED");
   if (userMandate.merchantId && userMandate.merchantId !== checkout.merchantId) throw new Error("MANDATE_MERCHANT_MISMATCH");
   if (!paymentRail.trim()) throw new Error("PAYMENT_RAIL_REQUIRED");
+
   if (userMandate.allowedProductIds) {
     const allowed = new Set(userMandate.allowedProductIds);
     if (checkout.lineItems.some((line) => !allowed.has(line.productId))) throw new Error("MANDATE_PRODUCT_NOT_ALLOWED");
   }
+
   if (!checkout.lineItems.length || checkout.lineItems.length > 10) throw new Error("INVALID_CHECKOUT_ITEMS");
-  if (checkout.lineItems.some((line) => !line.productId || !Number.isSafeInteger(line.quantity) || line.quantity < 1 || line.unitPricePaise < 0 || line.lineTotalPaise !== line.unitPricePaise * line.quantity)) throw new Error("INVALID_CHECKOUT_LINE");
+  if (
+    checkout.lineItems.some(
+      (line) =>
+        !line.productId ||
+        !Number.isSafeInteger(line.quantity) ||
+        line.quantity < 1 ||
+        !Number.isSafeInteger(line.unitPricePaise) ||
+        line.unitPricePaise < 0 ||
+        !Number.isSafeInteger(line.lineTotalPaise) ||
+        line.lineTotalPaise !== line.unitPricePaise * line.quantity,
+    )
+  ) {
+    throw new Error("INVALID_CHECKOUT_LINE");
+  }
+
   if (checkoutCartHash(checkout) !== checkout.cartHash) throw new Error("CHECKOUT_CART_HASH_MISMATCH");
 }
 
 export async function authorizeCheckout(input: MandateAuthorizationInput): Promise<MandateAuthorizationResult> {
   validateMandateShape(input.userMandate, input.checkout, input.paymentRail);
+
+  const replayed = findTransactionByMandateNonce(input.userMandate.mandateId, input.userMandate.nonce);
+  if (replayed) throw new Error("MANDATE_NONCE_REPLAY");
+
   const binding = canonicalizeCheckoutBinding(input.checkout);
   const bindingSignature = signBinding(binding);
   const firstLine = input.checkout.lineItems[0];
@@ -99,9 +129,11 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
     reason: input.userMandate.purpose,
     quoteId: input.checkout.quoteId,
   };
+
   const transaction = await proposeTransaction(purchaseIntent);
   if (transaction.state !== "policy_authorized") throw new Error(`MANDATE_POLICY_BLOCKED:${transaction.state}`);
   if (transaction.quote.totalPaise !== input.checkout.totalPaise) throw new Error("MANDATE_AMOUNT_REVALIDATION_FAILED");
+
   const rebound = canonicalizeCheckoutBinding({ ...input.checkout, totalPaise: transaction.quote.totalPaise });
   if (rebound !== binding) throw new Error("MANDATE_BINDING_CHANGED");
 
@@ -117,6 +149,7 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
     expiresAt,
     nonce: input.userMandate.nonce,
   };
+
   const authorizationId = `auth_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
   const paymentMandate: PaymentMandate = {
     mandateId: input.userMandate.mandateId,
@@ -130,6 +163,7 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
     expiresAt,
     nonce: input.userMandate.nonce,
   };
+
   const authorization: PaymentAuthorization = {
     authorizationId,
     mandateId: input.userMandate.mandateId,
@@ -142,7 +176,9 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
     createdAt,
     expiresAt,
   };
-  addMandateAuthorizationAudit(transaction.id, {
+
+  const boundTransaction = attachMandateAuthorization(transaction.id, authorization);
+  addMandateAuthorizationAudit(boundTransaction.id, {
     mandateId: checkoutMandate.mandateId,
     checkoutId: checkoutMandate.checkoutId,
     authorizationId: authorization.authorizationId,
@@ -151,7 +187,15 @@ export async function authorizeCheckout(input: MandateAuthorizationInput): Promi
     cartHash: authorization.cartHash,
     bindingSignature,
   });
-  return { transaction, checkoutMandate, paymentMandate, authorization, binding, bindingSignature };
+
+  return {
+    transaction: boundTransaction,
+    checkoutMandate,
+    paymentMandate,
+    authorization,
+    binding,
+    bindingSignature,
+  };
 }
 
 export async function authorizeSignedCheckout(input: SignedMandateAuthorizationInput): Promise<MandateAuthorizationResult> {
