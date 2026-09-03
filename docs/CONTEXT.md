@@ -12,21 +12,23 @@ Agentic commerce platform for Razorpay Track 01: AI Growth & Agentic Commerce.
 "The AI has intelligence, but it does not have payment authority."
 
 ## Current Architecture
-AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Model-backed Product Decision -> ACP Checkout Session -> Signed MANDATE Authorization -> Deterministic Policy Engine -> Transaction Authority -> Razorpay Test Mode -> Server Verification -> Webhooks -> Merchant Order -> Audit Trail
+AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Model-backed Product Decision -> Agent Negotiation -> ACP Checkout Session -> Signed MANDATE Authorization -> Deterministic Policy Engine -> Transaction Authority -> Razorpay Test Mode -> Server Verification -> Webhooks -> Merchant Order -> Audit Trail
 
 For delegated/autonomous buying:
 
-User -> Delegated Mandate -> Buyer Agent -> Merchant Quote -> MANDATE Boundary -> Transaction Authority -> Razorpay
+User -> Delegated Mandate -> Buyer Agent -> Merchant Agent -> Merchant Quote/Offer -> MANDATE Boundary -> Transaction Authority -> Razorpay
 
 ## Trust Zones
 1. AI / probabilistic: reads merchant data and proposes/ranks purchases. It cannot authorize payment or expand authority.
-2. ACP checkout / merchant zone: owns agent-readable checkout sessions and authoritative merchant quote construction. It cannot directly create Razorpay orders.
-3. MANDATE trusted control plane: verifies mandates, binds checkout state, revalidates product/inventory/quote, enforces deterministic policy, owns transaction state, creates Razorpay orders, verifies payments/webhooks and confirms merchant orders.
+2. Agent commerce / merchant zone: buyer and merchant agents exchange intents/offers backed by live merchant facts. Neither agent directly creates Razorpay orders.
+3. MANDATE trusted control plane: verifies mandates, verifies merchant-issued offers, binds checkout state, revalidates product/inventory/quote, enforces deterministic policy, owns transaction state, creates Razorpay orders, verifies payments/webhooks and confirms merchant orders.
 4. Razorpay payment rail: Test Mode Orders, Standard Checkout, Payments, capture and Webhooks.
 
 ## Security Invariants
 - LLM -> Razorpay = FORBIDDEN.
 - ACP client -> Razorpay = FORBIDDEN.
+- Buyer agent -> Razorpay = FORBIDDEN.
+- Merchant agent -> Razorpay = FORBIDDEN.
 - Frontend -> PAID = FORBIDDEN.
 - Unverified payment -> confirmed order = FORBIDDEN.
 - Policy BLOCK -> Razorpay order = FORBIDDEN.
@@ -42,6 +44,8 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Quote -> MANDATE Boundary -
 - ACP completion cannot bypass MANDATE authorization.
 - A delegated agent cannot change its own mandate limits, merchants, products or expiry.
 - Delegated spending is reserved before execution and counted as spent only after authoritative confirmation.
+- An accepted merchant offer must match the merchant-issued negotiation record before a delegated authorization is created.
+- A changed negotiation payload under the same acceptance key is rejected as an idempotency conflict.
 
 ## Implemented
 
@@ -56,6 +60,9 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Quote -> MANDATE Boundary -
 - Merchant operations console at `/operations`.
 - Transaction detail/audit view at `/operations/transactions/:id`.
 - Agent-readable deterministic revenue recommendations.
+- Merchant-agent negotiation endpoint at `/api/agent/negotiate`.
+- Merchant negotiation attestation endpoint at `/api/agent/negotiate/:id`.
+- Merchant stores the exact offer set long enough for gateway attestation in the current single-node demo.
 - ACP-shaped checkout session create/retrieve/update/complete/cancel endpoints.
 - ACP completion forwards signed mandate authorization to the gateway and returns a Razorpay Test Mode order reference as `ready_for_payment` rather than falsely claiming payment success.
 
@@ -67,7 +74,9 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Quote -> MANDATE Boundary -
 - Hard spending limit supplied by application, not the model.
 - Live Razorpay Standard Checkout launcher.
 - Failed-payment recovery flow creates a fresh transaction.
-- New delegated-authority workspace at `/delegated-mandates` with mandate creation, budget view, autonomous execution, allow/block feedback and revocation.
+- Delegated-authority workspace at `/delegated-mandates` with mandate creation, budget view, autonomous execution, allow/block feedback and revocation.
+- Buyer-agent negotiation API at `/api/agent/negotiate`.
+- Negotiation console at `/negotiation` showing intent -> merchant offers -> buyer selection -> gateway acceptance -> Razorpay Test Mode.
 
 ### Gateway
 - Deterministic policy engine with budget, quantity, inventory, merchant, quote-validity and amount-integrity checks.
@@ -92,16 +101,20 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Quote -> MANDATE Boundary -
 - Delegated execution API at `/v1/delegated-mandates/:mandateId/execute`.
 - Delegated mandate inspection/revocation APIs.
 - Settlement boundary for delegated executions.
+- Negotiated offer acceptance API at `/v1/negotiations/:negotiationId/accept`.
+- Merchant-issued offer attestation and authoritative quote revalidation before acceptance.
+- Negotiated acceptance is routed into the existing delegated mandate authorization core rather than creating a separate payment authority.
+- Negotiated acceptance replay handling plus idempotency conflict detection.
 
 ### Shared contracts
-- `packages/types` contains normalized commerce, mandate, authorization and delegated execution types.
+- `packages/types` contains normalized commerce, negotiation, mandate, authorization and delegated execution types.
 - `packages/schemas` contains corresponding Zod validation schemas.
 
 ### Infrastructure and validation
 - Dockerfiles for merchant, buyer and gateway.
 - Docker Compose services for PostgreSQL, merchant, buyer and gateway.
 - CI workflow: install, typecheck, unit tests and build.
-- Unit tests cover deterministic policy behavior, Razorpay signature validation, payment recovery, mandate binding/replay, delegated budget/revocation boundaries.
+- Gateway regression tests cover deterministic policy behavior, Razorpay signature validation, payment recovery, mandate binding/replay, delegated budget/revocation boundaries, merchant offer attestation and negotiation idempotency.
 
 ## Persistence Boundary
 PostgreSQL is the durable gateway backing store when `DATABASE_URL` is configured. Gateway startup hydrates transactions, audit events and delegated mandates/executions into runtime maps.
@@ -121,6 +134,8 @@ delegated_mandate_executions
 
 Delegated budget reservations use an atomic SQL update so multiple gateway instances cannot reserve more than the remaining total budget.
 
+Merchant negotiation state is currently in-memory on the merchant app. Production horizontal scaling should persist negotiation sessions and offer attestations.
+
 Merchant quote and ACP checkout-session stores remain in-memory and separate from gateway durability.
 
 ## Failure Recovery Contract
@@ -133,6 +148,8 @@ Merchant quote and ACP checkout-session stores remain in-memory and separate fro
 - Replayed signed mandate nonces are rejected for different checkouts.
 - Delegated executions that fail before payment-order creation release their budget reservation.
 - Delegated payment attempts remain `reserved` until the underlying transaction reaches `order_confirmed` or `payment_failed`/`cancelled`, at which point the reservation is settled.
+- A merchant offer amount/item/merchant/quote change is rejected before delegated authorization.
+- Reusing an acceptance key with a different offer payload returns an idempotency conflict and does not create another transaction.
 
 ## ACP / Phase 4 Flow
 ACP client
@@ -209,10 +226,69 @@ Revoke mandate
 Further execution BLOCKED
 ```
 
+## Phase 6 Agent Negotiation Flow
+
+The buyer and merchant agents can exchange a bounded commercial intent and quote-backed offers:
+
+```text
+Buyer Agent
+  -> intent + hard budget
+Merchant Agent
+  -> live catalog/inventory
+  -> quote-backed offers
+Buyer Agent
+  -> deterministic offer evaluation
+  -> selected offer
+Gateway
+  -> merchant-issued offer attestation
+  -> authoritative quote revalidation
+  -> delegated mandate boundary
+  -> transaction authorization
+  -> Razorpay Test Mode
+```
+
+Buyer demo page:
+
+```text
+http://localhost:3001/negotiation
+```
+
+Judge-facing sequence:
+
+```text
+Issue demo delegated mandate
+        ↓
+“Find the best ANC headphones under ₹5,000”
+        ↓
+BUYER AGENT: intent
+        ↓
+MERCHANT AGENT: multiple live offers
+        ↓
+BUYER AGENT: selects offer
+        ↓
+MANDATE GATEWAY: accepts + authorizes
+        ↓
+Razorpay Test Order
+```
+
+Tamper proof:
+
+```text
+selected offer
+  + change amount by ₹1
+        ↓
+merchant offer attestation mismatch
+        ↓
+NO delegated authorization
+NO Razorpay order
+```
+
 ## Current Limitations
-- Merchant quote and ACP checkout-session persistence is still in-memory.
+- Merchant negotiation state, merchant quote state and ACP checkout-session persistence are still in-memory.
 - Delegated mandate creation/revocation is currently a demo-facing trusted control endpoint; a production deployment needs authenticated user/session identity and stronger multi-tenant authorization.
 - Persistent mandate nonce uniqueness for cryptographic Phase 4 authorizations remains transaction-backed but a horizontally scaled production implementation should use a dedicated database uniqueness boundary.
+- Merchant-agent offer authentication/signing is not yet implemented; current gateway attestation uses the merchant's internal service boundary and exact stored offer comparison.
+- Buyer/merchant negotiation is protocol-neutral demo infrastructure; full external A2A protocol conformance is not claimed.
 - The Docker/Test Mode path still needs real local verification with developer-supplied Test credentials and public webhook delivery.
 - Buyer UI should refresh/poll after webhook-only payment state changes.
 - Revenue recommendations remain deterministic catalog intelligence rather than a complete campaign orchestrator.
@@ -220,4 +296,4 @@ Further execution BLOCKED
 - AP2 wire interoperability is not claimed.
 
 ## Next Step
-Phase 6: buyer-agent ↔ merchant-agent negotiation using the existing protocol-neutral offer model, while keeping every accepted offer inside the same MANDATE policy and payment authority.
+Phase 7: turn negotiation + recommendations into a complete growth orchestrator that can propose bundles/upsells, explain incremental revenue, obtain the required user/delegated approval, and route the resulting basket through the same MANDATE authority.
