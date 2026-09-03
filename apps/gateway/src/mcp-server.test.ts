@@ -68,7 +68,7 @@ test("supports stateless 2026 discover and tool listing", async () => {
   assert.equal(listed.status, 200);
   const body = await listed.json() as { result?: { tools?: Array<{ name?: string }>; ttlMs?: number; cacheScope?: string } };
   const names = body.result?.tools?.map((tool) => tool.name) ?? [];
-  assert.deepEqual(names, ["mandate_razorpay_create_order", "mandate_razorpay_fetch_order", "mandate_razorpay_fetch_payment", "mandate_razorpay_capture_payment"]);
+  assert.deepEqual(names, ["mandate_razorpay_create_order", "mandate_razorpay_fetch_order", "mandate_razorpay_fetch_payment", "mandate_razorpay_capture_payment", "mandate_razorpay_verify_settlement"]);
   assert.equal(body.result?.ttlMs, 60_000);
   assert.equal(body.result?.cacheScope, "private");
 });
