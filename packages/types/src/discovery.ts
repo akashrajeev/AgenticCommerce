@@ -43,6 +43,9 @@ export type AgentCommerceCapabilityDocument = {
   }>;
   endpoints: AgentEndpointDescriptor[];
   payments: PaymentCapability[];
+  supportedCurrencies: Array<"INR">;
+  supportedPaymentMethods: string[];
+  supportedExtensions: string[];
   discovery: {
     wellKnown: string;
     capabilities: string;
