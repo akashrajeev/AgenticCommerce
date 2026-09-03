@@ -9,6 +9,7 @@ export const agentCommerceCapabilities: AgentCommerceCapabilityDocument = {
     name: "Mandate Market Merchant Agent",
     issuer: MERCHANT_ID,
   },
+  merchant: merchantManifest,
   protocols: [
     { protocol: "mandate-native", version: "1.0", status: "implemented", role: "commerce", capabilities: ["merchant-discovery", "catalog", "inventory", "checkout-preview", "agent-checkout", "recommendations", "orders"] },
     { protocol: "acp", version: "2026-04-17", status: "adapter-ready", role: "commerce", capabilities: ["checkout-session-create", "checkout-session-update", "checkout-session-retrieve", "checkout-session-cancel", "checkout-session-completion-gate"] },
