@@ -9,7 +9,6 @@ type CompleteRequest = {
   userMandate?: unknown;
 };
 
-type GatewayErrorBody = { error?: unknown };
 type GatewayAuthorizationResponse = {
   transaction?: { id?: unknown };
   authorization?: { authorizationId?: unknown; status?: unknown };
@@ -20,7 +19,7 @@ type GatewayOrderResponse = {
   checkout?: { keyId?: unknown; mode?: unknown };
   mandateAuthorizationId?: unknown;
 };
-
+type AcpErrorLike = { status?: unknown; code?: unknown; message?: unknown };
 type BridgeResult = AcpOperationResult;
 
 const idempotency = new Map<string, { fingerprint: string; result: BridgeResult; expiresAt: number }>();
@@ -44,10 +43,6 @@ function fingerprint(value: unknown): string {
 
 function errorResult(status: number, code: string, message: string): BridgeResult {
   return { status, body: { type: "invalid_request", code, message } };
-}
-
-function withReplayHeaders(result: BridgeResult, headers: Headers): BridgeResult {
-  return { ...result, body: result.body, replayed: result.replayed };
 }
 
 function beginIdempotency(key: string, body: unknown): BridgeResult | undefined {
@@ -151,12 +146,20 @@ async function authorizeAtGateway(userMandate: SignedUserMandate, session: AcpCh
 }
 
 export async function completeCheckoutSessionWithMandate(id: string, body: unknown, headers: Headers): Promise<BridgeResult> {
-  const idempotencyKey = assertAcpHeaders(headers, true);
-  const requestBody = body ?? {};
-  if (!idempotencyKey) return errorResult(400, "idempotency_key_required", "Idempotency-Key header is required.");
+  let idempotencyKey = "";
+  try {
+    idempotencyKey = assertAcpHeaders(headers, true) ?? "";
+  } catch (error) {
+    const candidate = error as AcpErrorLike;
+    if (typeof candidate.status === "number" && typeof candidate.code === "string" && typeof candidate.message === "string") {
+      return errorResult(candidate.status, candidate.code, candidate.message);
+    }
+    return errorResult(400, "invalid_request", "The ACP request headers are invalid.");
+  }
 
+  const requestBody = body ?? {};
   const replay = beginIdempotency(idempotencyKey, requestBody);
-  if (replay) return withReplayHeaders(replay, headers);
+  if (replay) return replay;
 
   try {
     const session = getCheckoutSession(id);
@@ -242,8 +245,11 @@ export async function completeCheckoutSessionWithMandate(id: string, body: unkno
     return result;
   } catch (error) {
     failIdempotency(idempotencyKey);
+    const candidate = error as AcpErrorLike;
+    if (typeof candidate.status === "number" && typeof candidate.code === "string" && typeof candidate.message === "string") {
+      return errorResult(candidate.status, candidate.code, candidate.message);
+    }
     const message = error instanceof Error ? error.message : "Unexpected checkout completion error.";
-    if (message === "checkout_session_not_found") return errorResult(404, "checkout_session_not_found", "Checkout session not found.");
     return errorResult(500, "internal_error", message);
   }
 }
