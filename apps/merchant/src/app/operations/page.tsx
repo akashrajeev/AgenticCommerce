@@ -7,16 +7,30 @@ export const dynamic = "force-dynamic";
 const formatINR = (paise: number) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(paise / 100);
 
+type TransactionRow = Record<string, unknown>;
+
 async function getTransactions() {
   const gateway = process.env.GATEWAY_INTERNAL_URL ?? "http://localhost:4000";
   try {
     const response = await fetch(`${gateway}/v1/transactions`, { cache: "no-store" });
-    if (!response.ok) return [] as Array<Record<string, unknown>>;
-    const body = (await response.json()) as { transactions: Array<Record<string, unknown>> };
+    if (!response.ok) return [] as TransactionRow[];
+    const body = (await response.json()) as { transactions: TransactionRow[] };
     return body.transactions;
   } catch {
-    return [] as Array<Record<string, unknown>>;
+    return [] as TransactionRow[];
   }
+}
+
+function getBasketLift(transaction: TransactionRow): number {
+  const state = String(transaction.state);
+  if (state !== "order_confirmed") return 0;
+  const quote = transaction.quote as { totalPaise?: unknown; lineItems?: Array<{ lineTotalPaise?: unknown }> } | undefined;
+  const lineItems = quote?.lineItems ?? [];
+  if (lineItems.length < 2) return 0;
+  const firstLine = lineItems[0];
+  const firstTotal = typeof firstLine?.lineTotalPaise === "number" ? firstLine.lineTotalPaise : 0;
+  const total = typeof quote?.totalPaise === "number" ? quote.totalPaise : 0;
+  return Math.max(total - firstTotal, 0);
 }
 
 export default async function OperationsPage() {
@@ -24,6 +38,9 @@ export default async function OperationsPage() {
   const blocks = transactions.filter((txn) => (txn.policy as { decision?: string } | undefined)?.decision === "BLOCK").length;
   const razorpayOrders = transactions.filter((txn) => Boolean(txn.razorpayOrderId)).length;
   const confirmed = transactions.filter((txn) => txn.state === "order_confirmed").length;
+  const capturedVolume = transactions.reduce((sum, txn) => sum + (txn.state === "order_confirmed" && typeof (txn.quote as { totalPaise?: unknown } | undefined)?.totalPaise === "number" ? Number((txn.quote as { totalPaise: number }).totalPaise) : 0), 0);
+  const failedAttempts = transactions.filter((txn) => txn.state === "payment_failed").length;
+  const realizedBasketLift = transactions.reduce((sum, txn) => sum + getBasketLift(txn), 0);
 
   const opportunityMap = new Map<string, ReturnType<typeof getRevenueRecommendations>[number]>();
   for (const product of catalog) {
@@ -34,6 +51,7 @@ export default async function OperationsPage() {
   }
   const opportunities = [...opportunityMap.values()].sort((a, b) => b.score - a.score).slice(0, 4);
   const potentialLift = opportunities.reduce((sum, item) => sum + item.incrementalRevenuePaise, 0);
+  const latestPayments = transactions.filter((txn) => Boolean(txn.razorpayPaymentId)).slice(0, 4);
 
   return (
     <main className="ops-page">
@@ -54,6 +72,39 @@ export default async function OperationsPage() {
           <div><span>Razorpay orders</span><strong>{razorpayOrders}</strong><small>Test Mode orders created</small></div>
           <div><span>Merchant confirmations</span><strong>{confirmed}</strong><small>Verified payment path</small></div>
         </section>
+
+        <section className="ops-bottom-grid">
+          <div className="ops-card">
+            <p className="eyebrow">Payment rail</p>
+            <h2>Razorpay Test Mode evidence</h2>
+            <p>Every successful MANDATE checkout resolves to a real Razorpay Test Mode payment reference. Failed attempts remain visible without being promoted to merchant orders.</p>
+            <div className="flow-note"><span>MANDATE</span><i>→</i><span>Razorpay</span><i>→</i><span>Webhook</span></div>
+          </div>
+          <div className="ops-card">
+            <p className="eyebrow">Observed outcomes</p>
+            <h2>{formatINR(capturedVolume)} captured</h2>
+            <p>{failedAttempts} failed transaction attempt{failedAttempts === 1 ? "" : "s"} preserved as audit evidence. {realizedBasketLift ? `${formatINR(realizedBasketLift)} of confirmed basket lift is attributable to multi-line baskets.` : "Run an approved recommendation basket to measure realized lift here."}</p>
+            <div className="flow-note"><span>{confirmed} confirmed</span><i>•</i><span>{razorpayOrders} Razorpay orders</span></div>
+          </div>
+        </section>
+
+        {latestPayments.length ? (
+          <section className="transaction-table">
+            <div className="table-head"><span>Razorpay payment</span><span>MANDATE transaction</span><span>Amount</span><span>State</span><span>Evidence</span><span /></div>
+            {latestPayments.map((transaction) => {
+              const id = String(transaction.id);
+              const quote = transaction.quote as { totalPaise?: unknown } | undefined;
+              return <Link className="table-row" key={`payment-${id}`} href={`/operations/transactions/${encodeURIComponent(id)}`}>
+                <code>{String(transaction.razorpayPaymentId)}</code>
+                <span><code>{id}</code></span>
+                <strong>{typeof quote?.totalPaise === "number" ? formatINR(quote.totalPaise) : "—"}</strong>
+                <span className="state-text">{String(transaction.state).replaceAll("_", " ")}</span>
+                <span className="mini-status good">External payment ref</span>
+                <span>→</span>
+              </Link>;
+            })}
+          </section>
+        ) : null}
 
         <section className="revenue-opportunities">
           <div className="revenue-heading">
