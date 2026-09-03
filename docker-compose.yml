@@ -54,6 +54,7 @@ services:
       dockerfile: apps/gateway/Dockerfile
     container_name: mandate-mcp
     restart: unless-stopped
+    command: ["npm", "run", "start:mcp", "-w", "@mandate/gateway"]
     environment:
       NODE_ENV: production
       MCP_PORT: 4100
@@ -71,7 +72,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-      
+
   merchant:
     build:
       context: .
