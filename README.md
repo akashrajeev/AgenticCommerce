@@ -77,6 +77,7 @@ A reviewer does not need to run the repository to understand the design.
 | Start here | What it proves |
 |---|---|
 | [`TRACK-01-COVERAGE.md`](./TRACK-01-COVERAGE.md) | Track 01 capability → implementation → evidence |
+| [`docs/FEATURE-INVENTORY.md`](./docs/FEATURE-INVENTORY.md) | Complete feature-by-feature implementation and verification inventory |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Trust boundaries, state machine, data flow and invariants |
 | [`SECURITY-MODEL.md`](./SECURITY-MODEL.md) | Threat model, protected invariants and adversarial cases |
 | [`docs/GOLDEN-PATH.md`](./docs/GOLDEN-PATH.md) | Canonical end-to-end scenario |
@@ -96,7 +97,7 @@ Gateway:     http://localhost:4000
 Judge Labs:  http://localhost:3001/labs
 Proof:       http://localhost:3001/proof
 Demo check:  http://localhost:3001/demo
-``` 
+```
 
 The `/labs` area is the control room: policy boundary, amount-integrity tamper test, webhook replay test, persistence proof, unified proof and the canonical golden path are all surfaced from one place.
 
@@ -131,7 +132,7 @@ The `/labs` area is the control room: policy boundary, amount-integrity tamper t
 | Judge proof | Dedicated policy, tamper, replay, persistence and unified-proof surfaces |
 | Reproducibility | Docker Compose + CI typecheck/tests/build |
 
-The full requirement-to-code mapping lives in [`TRACK-01-COVERAGE.md`](./TRACK-01-COVERAGE.md).
+The full capability-to-code map is in [`TRACK-01-COVERAGE.md`](./TRACK-01-COVERAGE.md), and the complete feature inventory is in [`docs/FEATURE-INVENTORY.md`](./docs/FEATURE-INVENTORY.md).
 
 ---
 
@@ -354,7 +355,7 @@ Gateway
   → merchant order
 ```
 
-The Razorpay API secret and webhook secret stay server-side. The browser only receives the public key information needed by Standard Checkout.
+The Razorpay API secret and webhook secret stay server-side. The browser only receives the public key information needed for Standard Checkout.
 
 The project has also been exercised against Razorpay Test Mode during development; the resulting test payment activity is visible in the Razorpay Dashboard, providing an independent payment-rail artifact alongside the MANDATE transaction/audit record.
 
@@ -429,7 +430,7 @@ OPENAI_MODEL
 
 ```text
 Never commit API secrets.
-Never expose Razorpay_KEY_SECRET to the browser.
+Never expose RAZORPAY_KEY_SECRET to the browser.
 Never expose RAZORPAY_WEBHOOK_SECRET to the browser.
 Never let the client declare a payment successful.
 ```
@@ -447,40 +448,41 @@ AgenticCommerce/
 │   │       ├── BuyerWorkspace.tsx         # buyer + explicit approval + checkout
 │   │       ├── golden-path/               # canonical Track 01 flow
 │   │       ├── labs/                      # judge control room
-│   │       ├── policy-lab/                 # spend-boundary demonstration
-│   │       ├── tamper-lab/                 # amount-integrity demonstration
-│   │       ├── webhook-lab/                # replay/idempotency demonstration
-│   │       ├── proof/                      # unified transaction proof
-│   │       └── demo/                       # demo readiness
+│   │       ├── policy-lab/                # spend-boundary demonstration
+│   │       ├── tamper-lab/                # amount-integrity demonstration
+│   │       ├── webhook-lab/               # replay/idempotency demonstration
+│   │       ├── proof/                     # unified transaction proof
+│   │       └── demo/                      # demo readiness
 │   │
 │   ├── merchant/
 │   │   └── src/
-│   │       ├── app/api/agent/              # agent commerce contract
-│   │       ├── app/growth/                 # merchant growth command center
-│   │       ├── app/operations/             # transaction/revenue operations
-│   │       └── lib/revenue.ts              # recommendation engine
+│   │       ├── app/api/agent/             # agent commerce contract
+│   │       ├── app/growth/                # merchant growth command center
+│   │       ├── app/operations/            # transaction/revenue operations
+│   │       └── lib/revenue.ts             # recommendation engine
 │   │
 │   └── gateway/
 │       └── src/
-│           ├── app.ts                      # HTTP / Razorpay / webhook boundary
-│           ├── transaction-core.ts          # deterministic policy/state machine
-│           ├── persistence.ts               # PostgreSQL durability
-│           └── razorpay.ts                  # payment adapter
+│           ├── app.ts                     # HTTP / Razorpay / webhook boundary
+│           ├── transaction-core.ts         # deterministic policy/state machine
+│           ├── persistence.ts              # PostgreSQL durability
+│           └── razorpay.ts                 # payment adapter
 │
 ├── packages/
-│   ├── types/                              # shared contracts
+│   ├── types/                             # shared contracts
 │   ├── schemas/                            # validation schemas
 │   └── shared/                             # common runtime helpers
 │
 ├── database/
-│   └── init.sql                            # PostgreSQL schema/bootstrap
+│   └── init.sql                           # PostgreSQL schema/bootstrap
 │
 ├── docs/
 │   ├── CONTEXT.md
+│   ├── FEATURE-INVENTORY.md
 │   ├── GOLDEN-PATH.md
 │   ├── FINAL-DEMO.md
 │   ├── VERIFICATION.md
-│   └── razorpay/                           # integration research/notes
+│   └── razorpay/                          # integration research/notes
 │
 ├── TRACK-01-COVERAGE.md
 ├── ARCHITECTURE.md
@@ -576,6 +578,7 @@ These boundaries are documented rather than hidden.
 ## Documentation
 
 - [`TRACK-01-COVERAGE.md`](./TRACK-01-COVERAGE.md) — Track 01 requirement map
+- [`docs/FEATURE-INVENTORY.md`](./docs/FEATURE-INVENTORY.md) — complete feature inventory
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — architecture and state machine
 - [`SECURITY-MODEL.md`](./SECURITY-MODEL.md) — security model and adversarial cases
 - [`docs/GOLDEN-PATH.md`](./docs/GOLDEN-PATH.md) — canonical scenario
