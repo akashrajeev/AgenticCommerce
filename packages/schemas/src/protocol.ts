@@ -104,6 +104,15 @@ export const userMandateSchema = z.object({
   expiresAt: z.string().datetime(),
 });
 
+export const mandateCredentialSchema = z.object({
+  algorithm: z.literal("Ed25519"),
+  keyId: z.string().min(1).optional(),
+  publicKeyPem: z.string().min(1),
+  signatureBase64: z.string().min(1),
+});
+
+export const signedUserMandateSchema = userMandateSchema.extend({ credential: mandateCredentialSchema });
+
 export const checkoutMandateSchema = z.object({
   mandateId: z.string().min(1),
   checkoutId: z.string().min(1),
@@ -174,6 +183,7 @@ export type CommerceIntentInput = z.infer<typeof commerceIntentSchema>;
 export type MerchantOfferInput = z.infer<typeof merchantOfferSchema>;
 export type CheckoutSessionInput = z.infer<typeof checkoutSessionSchema>;
 export type UserMandateInput = z.infer<typeof userMandateSchema>;
+export type SignedUserMandateInput = z.infer<typeof signedUserMandateSchema>;
 export type CheckoutMandateInput = z.infer<typeof checkoutMandateSchema>;
 export type PaymentMandateInput = z.infer<typeof paymentMandateSchema>;
 export type PaymentAuthorizationInput = z.infer<typeof paymentAuthorizationSchema>;
