@@ -1,9 +1,21 @@
 import { createHash } from "node:crypto";
+import type { CheckoutLineItem, DelegatedMandate, MoneyAmount } from "@mandate/types";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { createApp } from "./app.js";
 import { authorizeSignedCheckout } from "./mandate-authorization.js";
 import { config } from "./config.js";
-import { attachRazorpayOrder, getTransaction } from "./transaction-core.js";
+import {
+  createDelegatedMandate,
+  delegatedMandateStats,
+  executeDelegatedMandate,
+  getDelegatedMandate,
+  hydrateDelegatedMandatesFromPersistence,
+  listDelegatedMandates,
+  revokeDelegatedMandate,
+  settleDelegatedExecution,
+} from "./delegated-mandates.js";
+import { initializePersistence } from "./persistence.js";
+import { attachRazorpayOrder, getTransaction, hydrateTransactionStore } from "./transaction-core.js";
 import { createOrder, getPublicConfig } from "./razorpay.js";
 
 const app = createApp();
@@ -30,6 +42,124 @@ app.post("/v1/mandates/authorize", async (request, response) => {
             ? 409
             : 422;
     return response.status(status).json({ error: message });
+  }
+});
+
+function parseMoney(input: unknown, field: string): MoneyAmount {
+  if (!input || typeof input !== "object") throw new Error(`INVALID_${field}`);
+  const value = input as Record<string, unknown>;
+  if (value.currency !== "INR" || typeof value.amountPaise !== "number" || !Number.isSafeInteger(value.amountPaise) || value.amountPaise <= 0) throw new Error(`INVALID_${field}`);
+  return { currency: "INR", amountPaise: value.amountPaise };
+}
+
+function parseDelegatedMandateCreate(body: unknown) {
+  if (!body || typeof body !== "object") throw new Error("INVALID_DELEGATED_MANDATE_REQUEST");
+  const value = body as Record<string, unknown>;
+  const list = (entry: unknown, field: string): string[] | undefined => {
+    if (entry === undefined) return undefined;
+    if (!Array.isArray(entry) || entry.some((item) => typeof item !== "string")) throw new Error(`INVALID_${field}`);
+    return entry as string[];
+  };
+  const constraints = value.constraints;
+  if (constraints !== undefined && (!constraints || typeof constraints !== "object" || Array.isArray(constraints))) throw new Error("INVALID_CONSTRAINTS");
+  return {
+    subjectId: typeof value.subjectId === "string" ? value.subjectId : "",
+    agentId: typeof value.agentId === "string" ? value.agentId : "",
+    purpose: typeof value.purpose === "string" ? value.purpose : "",
+    merchantIds: list(value.merchantIds, "MERCHANT_IDS"),
+    allowedProductIds: list(value.allowedProductIds, "ALLOWED_PRODUCT_IDS"),
+    maxSpendPerPurchase: parseMoney(value.maxSpendPerPurchase, "MAX_SPEND_PER_PURCHASE"),
+    totalBudget: parseMoney(value.totalBudget, "TOTAL_BUDGET"),
+    constraints: (constraints ?? {}) as Record<string, string | number | boolean | null>,
+    expiresAt: typeof value.expiresAt === "string" ? value.expiresAt : "",
+  };
+}
+
+function parseCheckoutBinding(body: unknown) {
+  if (!body || typeof body !== "object") throw new Error("INVALID_DELEGATED_CHECKOUT");
+  const value = body as Record<string, unknown>;
+  const lineItems = value.lineItems;
+  if (!Array.isArray(lineItems) || lineItems.length < 1 || lineItems.length > 10) throw new Error("INVALID_DELEGATED_CHECKOUT");
+  const normalized: CheckoutLineItem[] = lineItems.map((entry) => {
+    if (!entry || typeof entry !== "object") throw new Error("INVALID_DELEGATED_CHECKOUT");
+    const line = entry as Record<string, unknown>;
+    if (typeof line.productId !== "string" || !Number.isSafeInteger(line.quantity) || !Number.isSafeInteger(line.unitPricePaise) || !Number.isSafeInteger(line.lineTotalPaise)) throw new Error("INVALID_DELEGATED_CHECKOUT");
+    return { productId: line.productId, quantity: line.quantity, unitPricePaise: line.unitPricePaise, lineTotalPaise: line.lineTotalPaise };
+  });
+  const checkout = {
+    checkoutId: typeof value.checkoutId === "string" ? value.checkoutId : "",
+    merchantId: typeof value.merchantId === "string" ? value.merchantId : "",
+    quoteId: typeof value.quoteId === "string" ? value.quoteId : "",
+    currency: value.currency === "INR" ? "INR" as const : value.currency,
+    totalPaise: typeof value.totalPaise === "number" ? value.totalPaise : NaN,
+    lineItems: normalized,
+    expiresAt: typeof value.expiresAt === "string" ? value.expiresAt : "",
+    cartHash: typeof value.cartHash === "string" ? value.cartHash : "",
+  };
+  if (!checkout.checkoutId || !checkout.merchantId || !checkout.quoteId || checkout.currency !== "INR" || !Number.isSafeInteger(checkout.totalPaise) || !checkout.expiresAt || !checkout.cartHash) throw new Error("INVALID_DELEGATED_CHECKOUT");
+  if (createHash("sha256").update(canonicalizeCheckoutBinding(checkout)).digest("hex") !== checkout.cartHash) throw new Error("DELEGATED_CHECKOUT_HASH_MISMATCH");
+  return checkout;
+}
+
+app.post("/v1/delegated-mandates", async (request, response) => {
+  try {
+    const mandate = await createDelegatedMandate(parseDelegatedMandateCreate(request.body));
+    return response.status(201).json({ mandate, remainingPaise: mandate.totalBudget.amountPaise });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_CREATE_FAILED";
+    return response.status(message.startsWith("INVALID_") || message.includes("EXCEEDS") ? 400 : 422).json({ error: message });
+  }
+});
+
+app.get("/v1/delegated-mandates", (_request, response) => {
+  return response.json({ mandates: listDelegatedMandates().map((mandate) => delegatedMandateStats(mandate.mandateId)) });
+});
+
+app.get("/v1/delegated-mandates/:mandateId", (request, response) => {
+  const mandate = delegatedMandateStats(request.params.mandateId);
+  if (!mandate) return response.status(404).json({ error: "DELEGATED_MANDATE_NOT_FOUND" });
+  return response.json({ mandate });
+});
+
+app.post("/v1/delegated-mandates/:mandateId/revoke", async (request, response) => {
+  try {
+    const mandate = await revokeDelegatedMandate(request.params.mandateId);
+    return response.json({ mandate });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_REVOKE_FAILED";
+    return response.status(message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : 409).json({ error: message });
+  }
+});
+
+app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) => {
+  try {
+    const checkout = parseCheckoutBinding(request.body?.checkout ?? request.body);
+    const result = await executeDelegatedMandate(request.params.mandateId, checkout);
+    let paymentOrder: unknown = null;
+    if (config.razorpayKeyId && config.razorpayKeySecret) {
+      const order = await createOrder(result.authorization.transaction);
+      const updated = attachRazorpayOrder(result.authorization.transaction.id, order.id);
+      paymentOrder = { order, transaction: updated, checkout: getPublicConfig() };
+      result.authorization.transaction = updated;
+    }
+    return response.status(201).json({ mode: "delegated_autonomous", mandate: delegatedMandateStats(request.params.mandateId), execution: result.execution, authorization: result.authorization.authorization, transaction: result.authorization.transaction, payment: paymentOrder });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_EXECUTION_FAILED";
+    const status = message.includes("NOT_FOUND") ? 404 : message.includes("REMAINING_BUDGET") || message.includes("LIMIT") || message.includes("NOT_ALLOWED") || message.includes("EXPIRED") || message.includes("REVOKED") || message.includes("EXHAUSTED") ? 409 : message.includes("POLICY_BLOCKED") ? 422 : 400;
+    return response.status(status).json({ error: message, mode: "delegated_autonomous" });
+  }
+});
+
+app.post("/v1/delegated-mandates/settle/:transactionId", async (request, response) => {
+  try {
+    const transaction = getTransaction(request.params.transactionId);
+    if (!transaction) return response.status(404).json({ error: "TRANSACTION_NOT_FOUND" });
+    const outcome = transaction.state === "order_confirmed" ? "confirmed" : transaction.state === "payment_failed" || transaction.state === "cancelled" ? "released" : null;
+    if (!outcome) return response.status(409).json({ error: "TRANSACTION_NOT_SETTLEABLE", state: transaction.state });
+    await settleDelegatedExecution(transaction.id, outcome);
+    return response.json({ transaction, mandate: transaction.mandateAuthorization ? delegatedMandateStats(transaction.mandateAuthorization.mandateId) : undefined, outcome });
+  } catch (error) {
+    return response.status(422).json({ error: error instanceof Error ? error.message : "DELEGATED_MANDATE_SETTLEMENT_FAILED" });
   }
 });
 
@@ -96,6 +226,17 @@ app.post("/v1/mandates/:authorizationId/razorpay-order", async (request, respons
   }
 });
 
-app.listen(config.port, () => {
-  console.log(`MANDATE gateway listening on http://localhost:${config.port}`);
-});
+initializePersistence()
+  .then((seed) => {
+    hydrateTransactionStore(seed);
+    return hydrateDelegatedMandatesFromPersistence();
+  })
+  .then(() => {
+    app.listen(config.port, () => {
+      console.log(`MANDATE gateway listening on http://localhost:${config.port}`);
+    });
+  })
+  .catch((error) => {
+    console.error("MANDATE gateway startup failed", error);
+    process.exitCode = 1;
+  });
