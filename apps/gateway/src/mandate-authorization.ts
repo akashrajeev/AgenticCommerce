@@ -111,13 +111,61 @@ function validateMandateShape(userMandate: UserMandate, checkout: MandateCheckou
   if (checkoutCartHash(checkout) !== checkout.cartHash) throw new Error("CHECKOUT_CART_HASH_MISMATCH");
 }
 
+function replayExistingAuthorization(
+  input: MandateAuthorizationInput,
+  existing: Transaction,
+): MandateAuthorizationResult {
+  const authorization = existing.mandateAuthorization;
+  if (!authorization) throw new Error("MANDATE_NONCE_REPLAY");
+  if (authorization.checkoutSessionId !== input.checkout.checkoutId) throw new Error("MANDATE_NONCE_REPLAY");
+  if (authorization.cartHash !== input.checkout.cartHash) throw new Error("MANDATE_NONCE_REPLAY");
+  if (authorization.merchantId !== input.checkout.merchantId) throw new Error("MANDATE_NONCE_REPLAY");
+  if (authorization.paymentRail !== input.paymentRail) throw new Error("MANDATE_NONCE_REPLAY");
+  if (authorization.amount.currency !== input.checkout.currency || authorization.amount.amountPaise !== input.checkout.totalPaise) {
+    throw new Error("MANDATE_NONCE_REPLAY");
+  }
+  if (new Date(authorization.expiresAt).getTime() <= Date.now()) throw new Error("MANDATE_EXPIRED");
+
+  const binding = canonicalizeCheckoutBinding(input.checkout);
+  const checkoutMandate: CheckoutMandate = {
+    mandateId: authorization.mandateId,
+    checkoutId: authorization.checkoutSessionId,
+    merchantId: authorization.merchantId,
+    cartHash: authorization.cartHash,
+    amount: authorization.amount,
+    createdAt: authorization.createdAt,
+    expiresAt: authorization.expiresAt,
+    nonce: authorization.nonce,
+  };
+  const paymentMandate: PaymentMandate = {
+    mandateId: authorization.mandateId,
+    checkoutMandateId: `${authorization.mandateId}:${authorization.checkoutSessionId}`,
+    authorizationId: authorization.authorizationId,
+    merchantId: authorization.merchantId,
+    cartHash: authorization.cartHash,
+    amount: authorization.amount,
+    paymentRail: authorization.paymentRail,
+    createdAt: authorization.createdAt,
+    expiresAt: authorization.expiresAt,
+    nonce: authorization.nonce,
+  };
+  return {
+    transaction: existing,
+    checkoutMandate,
+    paymentMandate,
+    authorization,
+    binding,
+    bindingSignature: signBinding(binding),
+  };
+}
+
 export async function authorizeCheckout(input: MandateAuthorizationInput): Promise<MandateAuthorizationResult> {
   validateMandateShape(input.userMandate, input.checkout, input.paymentRail);
 
   const nonceClaim = `${input.userMandate.mandateId}:${input.userMandate.nonce}`;
-  if (inFlightNonceClaims.has(nonceClaim) || findTransactionByMandateNonce(input.userMandate.mandateId, input.userMandate.nonce)) {
-    throw new Error("MANDATE_NONCE_REPLAY");
-  }
+  const existing = findTransactionByMandateNonce(input.userMandate.mandateId, input.userMandate.nonce);
+  if (existing) return replayExistingAuthorization(input, existing);
+  if (inFlightNonceClaims.has(nonceClaim)) throw new Error("MANDATE_NONCE_REPLAY");
   inFlightNonceClaims.add(nonceClaim);
 
   try {
