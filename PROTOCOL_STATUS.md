@@ -4,9 +4,9 @@ This page prevents protocol-name drift and over-claiming. Each protocol is class
 
 | Protocol / surface | Current status | What MANDATE currently does | What is not claimed |
 |---|---|---|---|
-| Native MANDATE | **Implemented** | Shared protocol-neutral commerce and authorization model; deterministic gateway flow; versioned agent capability discovery; Phase 4A checkout-binding authorization artifacts. | No external standard certification. |
-| ACP | **Adapter target** | Capability document advertises the integration target; a working checkout-session adapter exists with idempotency/versioning and a deterministic MANDATE authorization boundary is now available behind the adapter. | No claim of external ACP wire-level authorization interoperability yet. |
-| AP2 | **Semantic alignment target** | Checkout/payment mandate concepts, cart binding and gateway authorization artifacts are modeled for the later credential phase. | No claim of AP2 credential or signature interoperability yet. |
+| Native MANDATE | **Implemented** | Shared protocol-neutral commerce and authorization model; deterministic gateway flow; versioned agent capability discovery; bound checkout authorization artifacts; Ed25519 user-mandate verification path. | No external standard certification. |
+| ACP | **Adapter target** | Capability document advertises the integration target; a working checkout-session adapter exists with idempotency/versioning and a deterministic MANDATE authorization boundary is available behind the adapter. | No claim of external ACP wire-level authorization interoperability yet. |
+| AP2 | **Semantic alignment target** | Checkout/payment mandate concepts, cart binding and gateway authorization artifacts are modeled for a later external credential adapter. | No claim of AP2 credential or signature interoperability yet. |
 | NPCI UAP | **Research / adapter-ready** | Delegated authority concepts are modeled and the capability registry can advertise future UAP support without granting it execution authority. | No claim of native UAP implementation; no public authoritative UAP specification was available during the current research pass. |
 | x402 | **Adapter target** | Shared payment-authorization boundary is designed so an x402 service-payment adapter can terminate at the same policy core. | No x402 wire-level payment implementation yet. |
 | Razorpay Test Mode | **Implemented and exercised** | Orders, Standard Checkout, payment retrieval/capture, server-side verification and webhooks. | Test Mode is not production payment processing. |
@@ -18,7 +18,8 @@ Phase 1  → shared semantic model                    DONE
 Phase 2  → agent identity + capabilities             DONE
 Phase 3  → ACP checkout adapter                      DONE
 Phase 4A → deterministic bound mandate artifacts     DONE
-Phase 4B → user credential / signature verification  NEXT
+Phase 4B → Ed25519 user credential verification      DONE (gateway/core)
+Phase 4C → user-facing credential issuance + UI      NEXT
 Phase 5  → autonomous bounded agent                  PLANNED
 Phase 6  → buyer ↔ merchant agent negotiation        PLANNED
 Phase 7  → campaign orchestrator                     PLANNED
@@ -31,7 +32,7 @@ Phase 12 → unified multi-protocol demo                PLANNED
 
 ## Phase 2 evidence
 
-The merchant now publishes a versioned capability document at:
+The merchant publishes a versioned capability document at:
 
 ```text
 GET /api/agent/capabilities
@@ -44,21 +45,27 @@ The buyer performs an actual server-side discovery handshake at:
 GET /api/agent/discovery
 ```
 
-and selects the highest-priority protocol that is genuinely usable. At the current baseline, that is `mandate-native` v1.0. Adapter-ready or research-only protocols are intentionally not selected.
+and selects the highest-priority protocol that is genuinely usable. Adapter-ready or research-only protocols are intentionally not selected.
 
 The buyer-facing `/capabilities` surface makes the discovery result inspectable without opening source code.
 
-## Phase 3 / 4A evidence
+## Phase 3 / 4 evidence
 
 ACP checkout sessions are exposed through the merchant adapter with versioned requests, required idempotency keys, fresh authoritative quotes, update/cancel lifecycle handling and a completion boundary that refuses to bypass MANDATE authorization.
 
-Phase 4A adds deterministic checkout binding, hard-spend enforcement and gateway-signed authorization artifacts in:
+Phase 4A/4B adds:
 
 ```text
 apps/gateway/src/mandate-authorization.ts
 apps/gateway/src/mandate-authorization.test.ts
+apps/gateway/src/mandate-credentials.ts
+apps/gateway/src/mandate-credentials.test.ts
 docs/MANDATE-AUTHORIZATION.md
 ```
+
+The signed path verifies an Ed25519 user credential, binds the mandate to a canonical checkout, reruns the gateway's merchant-truth policy checks, and records the resulting authorization artifact in the transaction audit trail. The gateway exposes the internal authorization boundary at `POST /v1/mandates/authorize`.
+
+Phase 4C remains intentionally separate: the repository does not yet claim a production credential-issuance ceremony, hardware-backed key storage, identity-provider integration, or external protocol credential interoperability.
 
 ## Rule for upgrading a status
 
