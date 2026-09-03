@@ -11,8 +11,8 @@ export type Product = {
 
 export type MerchantManifest = {
   name: string; merchantId: string; version: string; currency: "INR";
-  capabilities: { catalog: boolean; productLookup: boolean; inventory: boolean; checkoutPreview: boolean; agentCheckout: boolean; revenueRecommendations: boolean; payment: "razorpay" };
-  endpoints: { catalog: string; product: string; inventory: string; checkoutPreview: string; revenueRecommendations: string };
+  capabilities: { catalog: boolean; productLookup: boolean; inventory: boolean; checkoutPreview: boolean; agentCheckout: boolean; revenueRecommendations: boolean; growthOpportunities: boolean; payment: "razorpay" };
+  endpoints: { catalog: string; product: string; inventory: string; checkoutPreview: string; revenueRecommendations: string; growthOpportunities: string };
 };
 
 export type CheckoutLineItem = { productId: string; quantity: number; unitPricePaise: number; lineTotalPaise: number };
@@ -32,22 +32,12 @@ export type TransactionState = "intent_proposed" | "price_verified" | "policy_pe
 export type AuditActor = "user" | "ai_buyer" | "policy_engine" | "gateway" | "razorpay" | "merchant";
 export type AuditEvent = { id: string; transactionId: string; actor: AuditActor; action: string; reason: string; metadata?: Record<string, string | number | boolean | null>; createdAt: string };
 export type TransactionMandateAuthorization = {
-  authorizationId: string;
-  mandateId: string;
-  checkoutSessionId: string;
-  merchantId: string;
-  amount: MoneyAmount;
-  cartHash: string;
-  paymentRail: string;
-  status: "authorized" | "declined" | "consumed" | "expired";
-  createdAt: string;
-  expiresAt: string;
-  nonce: string;
+  authorizationId: string; mandateId: string; checkoutSessionId: string; merchantId: string; amount: MoneyAmount; cartHash: string;
+  paymentRail: string; status: "authorized" | "declined" | "consumed" | "expired"; createdAt: string; expiresAt: string; nonce: string;
 };
 export type Transaction = {
   id: string; state: TransactionState; intent: PurchaseIntent; quote: CheckoutQuote; policy?: PolicyDecision;
-  mandateAuthorization?: TransactionMandateAuthorization;
-  razorpayOrderId?: string; razorpayPaymentId?: string; createdAt: string; updatedAt: string;
+  mandateAuthorization?: TransactionMandateAuthorization; razorpayOrderId?: string; razorpayPaymentId?: string; createdAt: string; updatedAt: string;
 };
 
 export * from "./protocol.js";
