@@ -44,6 +44,26 @@ export async function POST(request: Request) {
     ));
   }
 
+  if (action === "auth-boundary") {
+    const [unauthorized, authorized] = await Promise.all([
+      callMcp(
+        { jsonrpc: "2.0", id: "lab-boundary-unauthorized", method: "tools/list" },
+        { "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
+      ),
+      callMcp(
+        { jsonrpc: "2.0", id: "lab-boundary-authorized", method: "tools/list" },
+        modernHeaders("tools/list"),
+      ),
+    ]);
+    return NextResponse.json({
+      scenario: "MCP_AUTH_BOUNDARY_PROOF",
+      expected: { unauthenticated: 401, authenticated: 200 },
+      unauthorized,
+      authorized,
+      proof: unauthorized.status === 401 && authorized.status === 200 ? "AUTHENTICATION_BOUNDARY_CONFIRMED" : "AUTHENTICATION_BOUNDARY_NOT_CONFIRMED",
+    });
+  }
+
   if (action === "discover") {
     return NextResponse.json(await callMcp(
       { jsonrpc: "2.0", id: "lab-discover", method: "server/discover", params: { _meta: { "io.modelcontextprotocol/clientInfo": { name: "mandate-buyer-lab", version: "1.0" } } } },
