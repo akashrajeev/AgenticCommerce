@@ -36,15 +36,7 @@ The model never receives or controls the Razorpay API secret.
 POST /mcp
 ```
 
-The facade supports JSON-RPC requests for:
-
-```text
-initialize
-tools/list
-tools/call
-```
-
-It validates the MCP protocol-version header when supplied and advertises the versions supported by the facade.
+The facade supports the current stateless MCP `2026-07-28` transport plus explicit compatibility for older 2025 protocol revisions. MCP 2026-07-28 removed the `initialize`/`initialized` handshake and uses self-describing requests with `MCP-Protocol-Version` and `Mcp-Method`; tool calls additionally carry `Mcp-Name`. Tool listings include cache hints. The facade implements `server/discover`, `tools/list`, `tools/call`, `ping`, and legacy `initialize` only for older protocol versions. citeturn991088view0
 
 Authentication is a bearer token:
 
@@ -75,11 +67,11 @@ There is deliberately **no trusted amount input**. The gateway transaction and m
 
 ### `mandate_razorpay_fetch_order`
 
-Reads a Razorpay order after proving the supplied order ID belongs to the supplied gateway transaction.
+Reads gateway-authoritative evidence after proving the supplied order ID belongs to the supplied transaction.
 
 ### `mandate_razorpay_fetch_payment`
 
-Reads a Razorpay payment after proving the payment belongs to the supplied gateway transaction.
+Reads gateway-authoritative evidence after proving the payment ID belongs to the supplied gateway transaction.
 
 ### `mandate_razorpay_capture_payment`
 
@@ -139,24 +131,36 @@ The MCP health endpoint is:
 GET http://localhost:4100/health
 ```
 
-## Example initialize
+## Modern 2026 request example
+
+```http
+POST /mcp HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer <MCP_AGENT_TOKEN>
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: mandate_razorpay_create_order
+```
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "initialize",
+  "method": "tools/call",
   "params": {
-    "capabilities": {}
+    "name": "mandate_razorpay_create_order",
+    "arguments": {
+      "authorizationId": "auth_...",
+      "transactionId": "tx_..."
+    },
+    "_meta": {
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "mandate-buyer",
+        "version": "1.0"
+      }
+    }
   }
 }
-```
-
-with:
-
-```text
-MCP-Protocol-Version: 2026-07-28
-Authorization: Bearer <MCP_AGENT_TOKEN>
 ```
 
 ## Judge experiment
@@ -188,10 +192,10 @@ Gateway revalidates transaction
 Razorpay Test Order created
 ```
 
-This proves that adding an agent tool interface does not move financial authority into the agent/model layer.
+The buyer-facing MCP lab demonstrates the first half without giving the browser access to the gateway secret. The full successful path is exercised from `/negotiation` after a real delegated authorization is established.
 
 ## Relationship to official Razorpay MCP
 
-Razorpay also publishes an official MCP server. MANDATE's Phase 9 implementation is intentionally a **policy facade experiment** rather than a claim that this repository is the official server or a fully interchangeable implementation.
+Razorpay also publishes an official MCP server with 35+ tools spanning payments, orders, refunds, payment links, QR codes, settlements, payouts and Standard Checkout. MANDATE's Phase 9 implementation is intentionally a **policy facade experiment** rather than a claim that this repository is the official server or a fully interchangeable implementation. citeturn620214search0turn620214search1
 
 A later integration can place the official Razorpay MCP client behind the same MANDATE authorization layer without changing the core transaction model.
