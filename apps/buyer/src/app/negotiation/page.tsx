@@ -152,10 +152,10 @@ export default function NegotiationPage() {
     }
     setBusy(true); setMessage("");
     try {
-      const response = await fetch(`${gateway}/v1/mandates/${encodeURIComponent(transaction.mandateAuthorizationId)}/razorpay-order`, {
+      const response = await fetch("/api/negotiation/order", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-mandate-gateway-secret": "" },
-        body: JSON.stringify({ transactionId: transaction.id }),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ authorizationId: transaction.mandateAuthorizationId, transactionId: transaction.id }),
       });
       const body = await response.json();
       if (!response.ok || !body.order || !body.checkout) throw new Error(body.error ?? "Unable to create Razorpay Test Mode order.");
