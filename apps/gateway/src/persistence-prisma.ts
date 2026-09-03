@@ -22,6 +22,20 @@ export type PersistedNegotiationAcceptance = {
   createdAt: string;
 };
 
+async function ensureNegotiationAcceptanceTable(prisma: Awaited<ReturnType<typeof getPrisma>>): Promise<void> {
+  if (!prisma) return;
+  await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS negotiation_acceptances (
+    key TEXT PRIMARY KEY,
+    negotiation_id TEXT NOT NULL,
+    mandate_id TEXT NOT NULL,
+    offer JSONB NOT NULL,
+    transaction_id TEXT NOT NULL UNIQUE,
+    execution_id TEXT NOT NULL,
+    authorization_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+  )`);
+}
+
 export async function saveTransaction(transaction: Transaction): Promise<void> {
   const prisma = await getPrisma();
   if (!prisma) return saveTransactionSql(transaction);
@@ -102,6 +116,7 @@ export async function releaseWebhookEvent(dedupeKey: string): Promise<void> {
 export async function saveNegotiationAcceptance(input: PersistedNegotiationAcceptance): Promise<void> {
   const prisma = await getPrisma();
   if (!prisma) return;
+  await ensureNegotiationAcceptanceTable(prisma);
   await prisma.negotiationAcceptance.upsert({
     where: { key: input.key },
     create: {
@@ -126,6 +141,7 @@ export async function saveNegotiationAcceptance(input: PersistedNegotiationAccep
 export async function loadNegotiationAcceptances(): Promise<PersistedNegotiationAcceptance[]> {
   const prisma = await getPrisma();
   if (!prisma) return [];
+  await ensureNegotiationAcceptanceTable(prisma);
   const rows = await prisma.negotiationAcceptance.findMany({ orderBy: { createdAt: "asc" } });
   return rows.map((row) => ({
     key: row.key,
