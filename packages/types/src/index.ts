@@ -35,3 +35,4 @@ export type Transaction = { id: string; state: TransactionState; intent: Purchas
 
 export * from "./protocol.js";
 export * from "./protocol-adapter.js";
+export * from "./discovery.js";
