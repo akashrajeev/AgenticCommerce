@@ -33,7 +33,7 @@ export async function GET() {
 
     const [timelineResponse, ordersResponse] = await Promise.all([gateway(`/v1/transactions/${encodeURIComponent(candidate.id)}/timeline`), gateway("/v1/merchant/orders")]);
     const timelineBody = timelineResponse.ok ? await timelineResponse.json() as { events?: AuditEvent[] } : { events: [] };
-    const ordersBody = ordersResponse.ok ? await ordersResponse.json() as { orders?: MerchantOrder[]; revenue?: { totalOrders?: number; realizedIncrementalRevenuePaise?: number; realizedBasketPaise?: number } } : { orders: [], revenue: undefined };
+    const ordersBody = ordersResponse.ok ? await ordersResponse.json() as { orders?: MerchantOrder[]; revenue?: { confirmedOrders?: number; upliftedOrders?: number; realizedIncrementalRevenuePaise?: number } } : { orders: [], revenue: undefined };
     const merchantOrder = (ordersBody.orders ?? []).find((item) => item.transactionId === candidate.id) ?? null;
     const merchandiseTotal = merchantOrder?.lineItems?.reduce((sum, item) => sum + item.lineTotalPaise, 0) ?? merchantOrder?.amountPaise ?? candidate.quote.totalPaise;
     const baseAmount = merchantOrder?.baseAmountPaise ?? (candidate.quote.lineItems[0]?.lineTotalPaise ?? merchandiseTotal);
@@ -48,7 +48,8 @@ export async function GET() {
       { key: "verified", label: "Verified", done: candidate.state === "payment_verified" || candidate.state === "order_confirmed" || eventActions.has("PAYMENT_VERIFIED") },
       { key: "order", label: "Merchant order", done: candidate.state === "order_confirmed" || Boolean(merchantOrder) },
     ];
-    return NextResponse.json({ status: candidate.state, transaction: candidate, events: timelineBody.events ?? [], merchantOrder, stages, summary: { baseAmountPaise: baseAmount, finalAmountPaise: merchandiseTotal, incrementalRevenuePaise: incremental, persistedRevenuePaise: ordersBody.revenue?.realizedIncrementalRevenuePaise ?? incremental, orderCount: ordersBody.revenue?.totalOrders ?? (merchantOrder ? 1 : 0) } });
+    const confirmedOrderCount = ordersBody.revenue?.confirmedOrders ?? (ordersBody.orders?.length ?? 0);
+    return NextResponse.json({ status: candidate.state, transaction: candidate, events: timelineBody.events ?? [], merchantOrder, stages, summary: { baseAmountPaise: baseAmount, finalAmountPaise: merchandiseTotal, incrementalRevenuePaise: incremental, persistedRevenuePaise: ordersBody.revenue?.realizedIncrementalRevenuePaise ?? incremental, orderCount: confirmedOrderCount } });
   } catch {
     return NextResponse.json({ error: "PROOF_UNAVAILABLE" }, { status: 502 });
   }
