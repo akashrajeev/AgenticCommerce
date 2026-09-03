@@ -22,5 +22,5 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/gateway ./apps/gateway
 COPY --from=builder /app/packages ./packages
-EXPOSE 4000
+EXPOSE 4000 4100
 CMD ["npm", "run", "start", "-w", "@mandate/gateway"]
