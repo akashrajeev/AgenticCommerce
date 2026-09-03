@@ -10,6 +10,29 @@ The system has three trust zones:
 2. **MANDATE gateway** — revalidates the product, inventory and quote; applies deterministic spending policy; controls transaction state; performs Razorpay operations; verifies payment; reconciles webhooks; and confirms the merchant order.
 3. **Razorpay Test Mode** — executes the real Orders, Standard Checkout and Payments flow using test credentials; no live funds move.
 
+## Start here as a judge
+
+- **`TRACK-01-COVERAGE.md`** — requirement-to-implementation matrix for Track 01.
+- **`docs/GOLDEN-PATH.md`** — canonical happy-path, failure-path and judge narration.
+- **`ARCHITECTURE.md`** — trust boundaries, state machine and security model.
+- **`/labs`** — focused judge demonstrations for policy, amount integrity, webhooks and persistence.
+- **`/proof`** — unified transaction/payment/revenue evidence.
+- **`/demo`** — readiness checks for the local integration stack.
+
+The canonical thesis is:
+
+```text
+AI recommends / plans
+        ≠
+AI authorizes money
+        ↓
+MANDATE policy authorizes
+        ↓
+Razorpay executes
+        ↓
+Webhook + audit + PostgreSQL prove the result
+```
+
 ## Repository
 
 - `apps/merchant` — modern ecommerce storefront, agent commerce API and merchant operations console.
@@ -20,6 +43,8 @@ The system has three trust zones:
 - `packages/shared` — shared runtime helpers.
 - `database` — PostgreSQL persistence schema used by the gateway when `DATABASE_URL` is configured.
 - `docs/CONTEXT.md` — persistent project context for future coding sessions.
+- `docs/GOLDEN-PATH.md` — submission's canonical demo scenario.
+- `TRACK-01-COVERAGE.md` — full Track 01 coverage map.
 - `docs/razorpay/` — current Razorpay Test Mode, Checkout, Payments, Webhook and MCP research.
 
 ## Real Razorpay flow
