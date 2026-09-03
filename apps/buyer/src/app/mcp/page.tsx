@@ -4,12 +4,19 @@ import { useState } from "react";
 
 type Result = { status?: number; body?: unknown } | null;
 
-const moneyText = (value: unknown) => typeof value === "number" ? `₹${(value / 100).toFixed(2)}` : "—";
+type BoundaryResult = {
+  scenario?: string;
+  expected?: { unauthenticated: number; authenticated: number };
+  unauthorized?: Result;
+  authorized?: Result;
+  proof?: string;
+};
 
 export default function McpLabPage() {
   const [discover, setDiscover] = useState<Result>(null);
   const [tools, setTools] = useState<Result>(null);
   const [unauthorized, setUnauthorized] = useState<Result>(null);
+  const [boundary, setBoundary] = useState<BoundaryResult | null>(null);
   const [guard, setGuard] = useState<Result>(null);
   const [busy, setBusy] = useState("");
 
@@ -28,6 +35,7 @@ export default function McpLabPage() {
   const pretty = (value: unknown) => JSON.stringify(value, null, 2);
   const guardBody = guard?.body as { body?: { result?: { isError?: boolean; content?: Array<{ text?: string }> } } } | undefined;
   const guardText = guardBody?.body?.result?.content?.[0]?.text;
+  const boundaryConfirmed = boundary?.proof === "AUTHENTICATION_BOUNDARY_CONFIRMED";
 
   return (
     <main style={{ minHeight: "100vh", background: "#f4f4f2", color: "#171717", fontFamily: "Inter, Arial, sans-serif", padding: 32 }}>
@@ -45,22 +53,33 @@ export default function McpLabPage() {
           <div style={{ background: "white", border: "1px solid #ddd", borderRadius: 18, padding: 24 }}>
             <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#666", marginBottom: 16 }}>ATTACK / TRUST BOUNDARY</div>
             <div style={{ display: "grid", gap: 14 }}>
+              <button disabled={!!busy} onClick={() => void run("auth-boundary", setBoundary as unknown as (result: Result) => void)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #c8d8ce", background: "#f5faf6", cursor: "pointer" }}>
+                <strong>1. Prove unauthenticated vs authenticated MCP access</strong><div style={{ color: "#666", marginTop: 5 }}>One click: missing bearer → 401, server-issued bearer → 200. The secret stays server-side.</div>
+              </button>
               <button disabled={!!busy} onClick={() => void run("unauthorized", setUnauthorized)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #ddd", background: "#fafafa", cursor: "pointer" }}>
-                <strong>1. Call MCP without a token</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: HTTP 401 before any tool can run.</div>
+                <strong>2. Call MCP without a token</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: HTTP 401 before any tool can run.</div>
               </button>
               <button disabled={!!busy} onClick={() => void run("discover", setDiscover)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #ddd", background: "#fafafa", cursor: "pointer" }}>
-                <strong>2. Discover the current MCP server</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: stateless 2026-07-28 `server/discover` response.</div>
+                <strong>3. Discover the current MCP server</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: stateless 2026-07-28 `server/discover` response.</div>
               </button>
               <button disabled={!!busy} onClick={() => void run("tools", setTools)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #ddd", background: "#fafafa", cursor: "pointer" }}>
-                <strong>3. List payment tools</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: four guarded Razorpay operations.</div>
+                <strong>4. List payment tools</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: four guarded Razorpay operations.</div>
               </button>
               <button disabled={!!busy} onClick={() => void run("guard", setGuard)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #ddd", background: "#fafafa", cursor: "pointer" }}>
-                <strong>4. Attempt capture without MANDATE authorization</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: MCP request is accepted, but the payment operation fails closed at the MANDATE boundary.</div>
+                <strong>5. Attempt capture without MANDATE authorization</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: MCP request is accepted, but the payment operation fails closed at the MANDATE boundary.</div>
               </button>
             </div>
           </div>
 
           <div style={{ display: "grid", gap: 20 }}>
+            <div style={{ background: boundaryConfirmed ? "#eef7f1" : "white", border: `1px solid ${boundaryConfirmed ? "#b9d3c2" : "#ddd"}`, borderRadius: 18, padding: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}><strong>Authentication boundary</strong>{boundary && <span style={{ fontSize: 11, fontWeight: 800 }}>{boundaryConfirmed ? "CONFIRMED" : "NOT CONFIRMED"}</span>}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 14 }}>
+                <BoundaryCell label="Without bearer" result={boundary?.unauthorized} expected={401} />
+                <BoundaryCell label="With server-side bearer" result={boundary?.authorized} expected={200} />
+              </div>
+              <div style={{ marginTop: 12, color: "#666", fontSize: 11, lineHeight: 1.5 }}>{boundary ? `Expected 401 → 200 · observed ${boundary.unauthorized?.status ?? "—"} → ${boundary.authorized?.status ?? "—"}` : "Run the proof to make the trust boundary visible to a judge."}</div>
+            </div>
             <ResultCard title="Unauthenticated client" result={unauthorized} accent={unauthorized?.status === 401 ? "BLOCKED" : undefined} pretty={pretty} />
             <ResultCard title="MCP discover" result={discover} pretty={pretty} />
             <ResultCard title="Available tools" result={tools} pretty={pretty} />
@@ -81,6 +100,11 @@ export default function McpLabPage() {
       </div>
     </main>
   );
+}
+
+function BoundaryCell({ label, result, expected }: { label: string; result?: Result; expected: number }) {
+  const ok = result?.status === expected;
+  return <div style={{ padding: 14, border: `1px solid ${ok ? "#b9d3c2" : "#ddd"}`, borderRadius: 14, background: ok ? "#f5faf6" : "#fafafa" }}><div style={{ fontSize: 10, color: "#777", letterSpacing: 1 }}>{label}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 5 }}>{result?.status ?? "—"}</div><div style={{ color: "#666", fontSize: 10, marginTop: 4 }}>{result ? (ok ? "expected outcome" : `expected HTTP ${expected}`) : "awaiting proof"}</div></div>;
 }
 
 function ResultCard({ title, result, accent, pretty }: { title: string; result: Result; accent?: string; pretty: (value: unknown) => string }) {
