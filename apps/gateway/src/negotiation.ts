@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import type { CheckoutLineItem, MerchantOffer, PaymentAuthorization, Transaction } from "@mandate/types";
+import type { CheckoutLineItem, MerchantOffer, PaymentAuthorization, Transaction, MerchantOfferAttestation } from "@mandate/types";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { config } from "./config.js";
 import { executeDelegatedMandate, delegatedMandateStats } from "./delegated-mandates.js";
 import { loadNegotiationAcceptances, saveNegotiationAcceptance, type PersistedNegotiationAcceptance } from "./persistence-prisma.js";
+import { verifyMerchantOfferAttestation } from "./merchant-credentials.js";
 import { getTransaction } from "./transaction-core.js";
 
 type AcceptedNegotiation = Omit<PersistedNegotiationAcceptance, "createdAt"> & { createdAt?: string };
@@ -23,6 +24,7 @@ type MerchantQuoteResponse = {
 type MerchantNegotiationResponse = {
   negotiationId: string;
   offers: MerchantOffer[];
+  offerAttestations?: MerchantOfferAttestation[];
 };
 
 type NegotiatedAcceptanceResult = {
@@ -95,13 +97,16 @@ export async function hydrateNegotiationAcceptancesFromPersistence(): Promise<vo
   hydrateNegotiationAcceptances(await loadNegotiationAcceptances());
 }
 
-async function fetchMerchantOfferAttestation(negotiationId: string, offer: MerchantOffer) {
+async function fetchMerchantOfferAttestation(negotiationId: string, offer: MerchantOffer): Promise<MerchantOffer> {
   const response = await fetch(`${config.merchantInternalUrl}/api/agent/negotiate/${encodeURIComponent(negotiationId)}`, { cache: "no-store" });
   if (!response.ok) throw new Error("NEGOTIATION_NOT_FOUND");
   const body = await response.json().catch(() => null) as MerchantNegotiationResponse | null;
   if (!body || body.negotiationId !== negotiationId) throw new Error("NEGOTIATION_NOT_FOUND");
   const issued = body.offers.find((candidate) => candidate.offerId === offer.offerId);
   if (!issued) throw new Error("NEGOTIATED_OFFER_NOT_ISSUED");
+  const attestation = body.offerAttestations?.find((candidate) => candidate.offerId === offer.offerId);
+  if (!attestation) throw new Error("NEGOTIATED_OFFER_SIGNATURE_REQUIRED");
+  verifyMerchantOfferAttestation(issued, attestation, offer.merchantId);
   if (issued.intentId !== offer.intentId || issued.merchantId !== offer.merchantId || issued.quoteId !== offer.quoteId) throw new Error("NEGOTIATED_OFFER_ATTESTATION_MISMATCH");
   if (issued.amount.currency !== offer.amount.currency || issued.amount.amountPaise !== offer.amount.amountPaise) throw new Error("NEGOTIATED_OFFER_ATTESTATION_MISMATCH");
   if (issued.sourceProtocol !== offer.sourceProtocol || issued.expiresAt !== offer.expiresAt) throw new Error("NEGOTIATED_OFFER_ATTESTATION_MISMATCH");
