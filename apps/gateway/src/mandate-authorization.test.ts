@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import type { CheckoutQuote, Product, UserMandate } from "@mandate/types";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
-import { authorizeCheckout, type MandateCheckoutBindingInput } from "./mandate-authorization.js";
+import { canonicalizeUserMandate } from "./mandate-credentials.js";
+import { authorizeCheckout, authorizeSignedCheckout, type MandateCheckoutBindingInput } from "./mandate-authorization.js";
 
 function product(id = "hp-001"): Product {
   return { id, sku: id, name: id === "hp-001" ? "SoundMax Pro" : "Arc Precision Mouse", slug: id, category: id === "hp-001" ? "headphones" : "mice", pricePaise: id === "hp-001" ? 399900 : 249900, currency: "INR", rating: 4.6, reviewCount: 10, inventory: 20, shortDescription: "test", description: "test", features: [], specifications: {}, tags: ["test"] };
@@ -23,6 +24,13 @@ function binding(): MandateCheckoutBindingInput {
 function mandate(overrides: Partial<UserMandate> = {}): UserMandate {
   const now = Date.now();
   return { mandateId: "mandate_user_001", subjectId: "user_001", agentId: "buyer_001", merchantId: "mandate-market", purpose: "Buy approved headphones", maxSpend: { currency: "INR", amountPaise: 500000 }, constraints: {}, approvalMode: "human_present", nonce: "nonce_1234567890abcdef", issuedAt: new Date(now - 5_000).toISOString(), expiresAt: new Date(now + 60_000).toISOString(), ...overrides };
+}
+
+function signedMandate(base = mandate()) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const signatureBase64 = sign(null, Buffer.from(canonicalizeUserMandate(base), "utf8"), privateKey).toString("base64");
+  return { ...base, credential: { algorithm: "Ed25519" as const, keyId: "test-key", publicKeyPem, signatureBase64 } };
 }
 
 async function withMerchantFetch(q: CheckoutQuote, fn: () => Promise<void>): Promise<void> {
@@ -50,6 +58,14 @@ test("authorizes a fresh checkout only when the mandate and binding match", asyn
     assert.equal(result.paymentMandate.authorizationId, result.authorization.authorizationId);
     assert.equal(result.authorization.status, "authorized");
     assert.match(result.bindingSignature, /^[a-f0-9]{64}$/);
+  });
+});
+
+test("authorizes a signed user mandate only after Ed25519 verification", async () => {
+  const q = quote();
+  await withMerchantFetch(q, async () => {
+    const result = await authorizeSignedCheckout({ userMandate: signedMandate(), checkout: binding(), paymentRail: "razorpay_standard_checkout" });
+    assert.equal(result.authorization.status, "authorized");
   });
 });
 
