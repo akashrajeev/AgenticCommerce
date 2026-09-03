@@ -1,6 +1,7 @@
-import { createHash, timingSafeEqual } from "node:crypto";
-import express, { type Request, type Response } from "express";
+import { timingSafeEqual } from "node:crypto";
+import express, { type Request } from "express";
 import { config } from "./config.js";
+import { fetchOrder, fetchPayment } from "./razorpay.js";
 
 const app = express();
 const port = Number.parseInt(process.env.MCP_PORT ?? "4100", 10);
@@ -119,6 +120,15 @@ async function gatewayJson(path: string, init?: RequestInit) {
   return body;
 }
 
+function findTransaction(transactionsBody: unknown, transactionId: string): Record<string, unknown> {
+  const transactions = transactionsBody && typeof transactionsBody === "object" && Array.isArray((transactionsBody as Record<string, unknown>).transactions)
+    ? (transactionsBody as Record<string, unknown>).transactions
+    : [];
+  const transaction = transactions.find((item: unknown) => item && typeof item === "object" && (item as Record<string, unknown>).id === transactionId);
+  if (!transaction || typeof transaction !== "object") throw new Error("TRANSACTION_NOT_FOUND");
+  return transaction as Record<string, unknown>;
+}
+
 function assertTransactionBinding(transaction: Record<string, unknown>, transactionId: string, authorizationId?: string): void {
   if (transaction.id !== transactionId) throw new Error("TRANSACTION_BINDING_MISMATCH");
   if (authorizationId !== undefined) {
@@ -143,41 +153,32 @@ async function callTool(name: string, args: Record<string, unknown>) {
       const transactionId = requiredString(args, "transactionId");
       const orderId = requiredString(args, "orderId");
       const body = await gatewayJson("/v1/transactions");
-      const transactions = Array.isArray(body?.transactions) ? body.transactions : [];
-      const transaction = transactions.find((item: unknown) => item && typeof item === "object" && (item as Record<string, unknown>).id === transactionId) as Record<string, unknown> | undefined;
-      if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+      const transaction = findTransaction(body, transactionId);
       assertTransactionBinding(transaction, transactionId);
       if (transaction.razorpayOrderId !== orderId) throw new Error("RAZORPAY_ORDER_BINDING_MISMATCH");
-      return gatewayJson(`/v1/transactions/${encodeURIComponent(transactionId)}/timeline`, { method: "GET" });
+      return await fetchOrder(orderId);
     }
     case "mandate_razorpay_fetch_payment": {
       const transactionId = requiredString(args, "transactionId");
       const paymentId = requiredString(args, "paymentId");
       const body = await gatewayJson("/v1/transactions");
-      const transactions = Array.isArray(body?.transactions) ? body.transactions : [];
-      const transaction = transactions.find((item: unknown) => item && typeof item === "object" && (item as Record<string, unknown>).id === transactionId) as Record<string, unknown> | undefined;
-      if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+      const transaction = findTransaction(body, transactionId);
       assertTransactionBinding(transaction, transactionId);
       if (transaction.razorpayPaymentId !== paymentId) throw new Error("RAZORPAY_PAYMENT_BINDING_MISMATCH");
-      return gatewayJson(`/v1/transactions/${encodeURIComponent(transactionId)}/timeline`, { method: "GET" });
+      return await fetchPayment(paymentId);
     }
     case "mandate_razorpay_capture_payment": {
       const authorizationId = requiredString(args, "authorizationId");
       const transactionId = requiredString(args, "transactionId");
       const paymentId = requiredString(args, "paymentId");
       const body = await gatewayJson("/v1/transactions");
-      const transactions = Array.isArray(body?.transactions) ? body.transactions : [];
-      const transaction = transactions.find((item: unknown) => item && typeof item === "object" && (item as Record<string, unknown>).id === transactionId) as Record<string, unknown> | undefined;
-      if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+      const transaction = findTransaction(body, transactionId);
       assertTransactionBinding(transaction, transactionId, authorizationId);
       if (transaction.razorpayPaymentId && transaction.razorpayPaymentId !== paymentId) throw new Error("RAZORPAY_PAYMENT_BINDING_MISMATCH");
-      const capture = await gateway(`/v1/transactions/${encodeURIComponent(transactionId)}/capture`, {
+      return gatewayJson(`/v1/transactions/${encodeURIComponent(transactionId)}/capture`, {
         method: "POST",
         body: JSON.stringify({ paymentId, amountPaise: transaction.quote && typeof transaction.quote === "object" ? (transaction.quote as Record<string, unknown>).totalPaise : undefined }),
       });
-      const payload = await capture.json().catch(() => null);
-      if (!capture.ok) throw new Error(payload && typeof payload.error === "string" ? payload.error : `GATEWAY_HTTP_${capture.status}`);
-      return payload;
     }
     default:
       throw new Error("TOOL_NOT_FOUND");
@@ -209,27 +210,18 @@ app.post("/mcp", async (request, response) => {
         serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.1.0" },
       }));
     }
-
     if (message.method === "tools/list") return response.json(jsonRpc(id, { tools }));
-
     if (message.method === "tools/call") {
       const params = message.params && typeof message.params === "object" ? message.params as Record<string, unknown> : {};
       const name = typeof params.name === "string" ? params.name : "";
       if (!name) return response.json(jsonRpcError(id, -32602, "Tool name is required"));
       const result = await callTool(name, asArgs(params.arguments ?? {}));
-      return response.json(jsonRpc(id, {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-        structuredContent: result,
-      }));
+      return response.json(jsonRpc(id, { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result }));
     }
-
     return response.json(jsonRpcError(id, -32601, `Method not found: ${message.method}`));
   } catch (error) {
     const messageText = error instanceof Error ? error.message : "MCP_TOOL_FAILED";
-    return response.json(jsonRpc(id, {
-      content: [{ type: "text", text: messageText }],
-      isError: true,
-    }));
+    return response.json(jsonRpc(id, { content: [{ type: "text", text: messageText }], isError: true }));
   }
 });
 
