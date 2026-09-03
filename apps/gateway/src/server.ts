@@ -8,7 +8,6 @@ import {
   createDelegatedMandate,
   delegatedMandateStats,
   executeDelegatedMandate,
-  getDelegatedMandate,
   hydrateDelegatedMandatesFromPersistence,
   listDelegatedMandates,
   revokeDelegatedMandate,
@@ -22,25 +21,15 @@ const app = createApp();
 
 app.post("/v1/mandates/authorize", async (request, response) => {
   const providedSecret = request.header("x-mandate-gateway-secret") ?? "";
-  if (!providedSecret || providedSecret !== config.internalGatewaySecret) {
-    return response.status(401).json({ error: "UNAUTHORIZED_MANDATE_AUTHORIZATION" });
-  }
+  if (!providedSecret || providedSecret !== config.internalGatewaySecret) return response.status(401).json({ error: "UNAUTHORIZED_MANDATE_AUTHORIZATION" });
   try {
     const body = request.body as { userMandate?: { credential?: unknown } } | null;
     if (!body || !body.userMandate) return response.status(400).json({ error: "MANDATE_REQUIRED" });
     if (!body.userMandate.credential) return response.status(400).json({ error: "MANDATE_CREDENTIAL_REQUIRED" });
-    const result = await authorizeSignedCheckout(request.body);
-    return response.status(201).json(result);
+    return response.status(201).json(await authorizeSignedCheckout(request.body));
   } catch (error) {
     const message = error instanceof Error ? error.message : "MANDATE_AUTHORIZATION_FAILED";
-    const status =
-      message.startsWith("MANDATE_POLICY_BLOCKED")
-        ? 422
-        : message.startsWith("INVALID_") || message.includes("_MISMATCH") || message.includes("_EXCEEDED") || message === "MANDATE_EXPIRED"
-          ? 400
-          : message === "MANDATE_NONCE_REPLAY"
-            ? 409
-            : 422;
+    const status = message.startsWith("MANDATE_POLICY_BLOCKED") ? 422 : message.startsWith("INVALID_") || message.includes("_MISMATCH") || message.includes("_EXCEEDED") || message === "MANDATE_EXPIRED" ? 400 : message === "MANDATE_NONCE_REPLAY" ? 409 : 422;
     return response.status(status).json({ error: message });
   }
 });
@@ -48,8 +37,9 @@ app.post("/v1/mandates/authorize", async (request, response) => {
 function parseMoney(input: unknown, field: string): MoneyAmount {
   if (!input || typeof input !== "object") throw new Error(`INVALID_${field}`);
   const value = input as Record<string, unknown>;
-  if (value.currency !== "INR" || typeof value.amountPaise !== "number" || !Number.isSafeInteger(value.amountPaise) || value.amountPaise <= 0) throw new Error(`INVALID_${field}`);
-  return { currency: "INR", amountPaise: value.amountPaise };
+  const amountPaise = value.amountPaise;
+  if (value.currency !== "INR" || typeof amountPaise !== "number" || !Number.isSafeInteger(amountPaise) || amountPaise <= 0) throw new Error(`INVALID_${field}`);
+  return { currency: "INR", amountPaise };
 }
 
 function parseDelegatedMandateCreate(body: unknown) {
@@ -83,21 +73,23 @@ function parseCheckoutBinding(body: unknown) {
   const normalized: CheckoutLineItem[] = lineItems.map((entry) => {
     if (!entry || typeof entry !== "object") throw new Error("INVALID_DELEGATED_CHECKOUT");
     const line = entry as Record<string, unknown>;
-    if (typeof line.productId !== "string" || !Number.isSafeInteger(line.quantity) || !Number.isSafeInteger(line.unitPricePaise) || !Number.isSafeInteger(line.lineTotalPaise)) throw new Error("INVALID_DELEGATED_CHECKOUT");
-    return { productId: line.productId, quantity: line.quantity, unitPricePaise: line.unitPricePaise, lineTotalPaise: line.lineTotalPaise };
+    const productId = line.productId;
+    const quantity = line.quantity;
+    const unitPricePaise = line.unitPricePaise;
+    const lineTotalPaise = line.lineTotalPaise;
+    if (typeof productId !== "string" || !productId || typeof quantity !== "number" || !Number.isSafeInteger(quantity) || typeof unitPricePaise !== "number" || !Number.isSafeInteger(unitPricePaise) || typeof lineTotalPaise !== "number" || !Number.isSafeInteger(lineTotalPaise)) throw new Error("INVALID_DELEGATED_CHECKOUT");
+    return { productId, quantity, unitPricePaise, lineTotalPaise };
   });
-  const checkout = {
-    checkoutId: typeof value.checkoutId === "string" ? value.checkoutId : "",
-    merchantId: typeof value.merchantId === "string" ? value.merchantId : "",
-    quoteId: typeof value.quoteId === "string" ? value.quoteId : "",
-    currency: value.currency === "INR" ? "INR" as const : value.currency,
-    totalPaise: typeof value.totalPaise === "number" ? value.totalPaise : NaN,
-    lineItems: normalized,
-    expiresAt: typeof value.expiresAt === "string" ? value.expiresAt : "",
-    cartHash: typeof value.cartHash === "string" ? value.cartHash : "",
-  };
-  if (!checkout.checkoutId || !checkout.merchantId || !checkout.quoteId || checkout.currency !== "INR" || !Number.isSafeInteger(checkout.totalPaise) || !checkout.expiresAt || !checkout.cartHash) throw new Error("INVALID_DELEGATED_CHECKOUT");
-  if (createHash("sha256").update(canonicalizeCheckoutBinding(checkout)).digest("hex") !== checkout.cartHash) throw new Error("DELEGATED_CHECKOUT_HASH_MISMATCH");
+  const checkoutId = typeof value.checkoutId === "string" ? value.checkoutId : "";
+  const merchantId = typeof value.merchantId === "string" ? value.merchantId : "";
+  const quoteId = typeof value.quoteId === "string" ? value.quoteId : "";
+  const currency = value.currency === "INR" ? ("INR" as const) : null;
+  const totalPaise = value.totalPaise;
+  const expiresAt = typeof value.expiresAt === "string" ? value.expiresAt : "";
+  const cartHash = typeof value.cartHash === "string" ? value.cartHash : "";
+  if (!checkoutId || !merchantId || !quoteId || currency !== "INR" || typeof totalPaise !== "number" || !Number.isSafeInteger(totalPaise) || !expiresAt || !cartHash) throw new Error("INVALID_DELEGATED_CHECKOUT");
+  const checkout = { checkoutId, merchantId, quoteId, currency, totalPaise, lineItems: normalized, expiresAt, cartHash };
+  if (createHash("sha256").update(canonicalizeCheckoutBinding(checkout)).digest("hex") !== cartHash) throw new Error("DELEGATED_CHECKOUT_HASH_MISMATCH");
   return checkout;
 }
 
@@ -111,9 +103,7 @@ app.post("/v1/delegated-mandates", async (request, response) => {
   }
 });
 
-app.get("/v1/delegated-mandates", (_request, response) => {
-  return response.json({ mandates: listDelegatedMandates().map((mandate) => delegatedMandateStats(mandate.mandateId)) });
-});
+app.get("/v1/delegated-mandates", (_request, response) => response.json({ mandates: listDelegatedMandates().map((mandate) => delegatedMandateStats(mandate.mandateId)) }));
 
 app.get("/v1/delegated-mandates/:mandateId", (request, response) => {
   const mandate = delegatedMandateStats(request.params.mandateId);
@@ -123,8 +113,7 @@ app.get("/v1/delegated-mandates/:mandateId", (request, response) => {
 
 app.post("/v1/delegated-mandates/:mandateId/revoke", async (request, response) => {
   try {
-    const mandate = await revokeDelegatedMandate(request.params.mandateId);
-    return response.json({ mandate });
+    return response.json({ mandate: await revokeDelegatedMandate(request.params.mandateId) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_REVOKE_FAILED";
     return response.status(message === "DELEGATED_MANDATE_NOT_FOUND" ? 404 : 409).json({ error: message });
@@ -137,15 +126,21 @@ app.post("/v1/delegated-mandates/:mandateId/execute", async (request, response) 
     const result = await executeDelegatedMandate(request.params.mandateId, checkout);
     let paymentOrder: unknown = null;
     if (config.razorpayKeyId && config.razorpayKeySecret) {
-      const order = await createOrder(result.authorization.transaction);
-      const updated = attachRazorpayOrder(result.authorization.transaction.id, order.id);
-      paymentOrder = { order, transaction: updated, checkout: getPublicConfig() };
-      result.authorization.transaction = updated;
+      try {
+        const order = await createOrder(result.authorization.transaction);
+        const updated = attachRazorpayOrder(result.authorization.transaction.id, order.id);
+        paymentOrder = { order, transaction: updated, checkout: getPublicConfig() };
+        result.authorization.transaction = updated;
+      } catch (error) {
+        const { settleDelegatedExecution: _settle } = await import("./delegated-mandates.js");
+        await _settle(result.authorization.transaction.id, "released");
+        throw error;
+      }
     }
     return response.status(201).json({ mode: "delegated_autonomous", mandate: delegatedMandateStats(request.params.mandateId), execution: result.execution, authorization: result.authorization.authorization, transaction: result.authorization.transaction, payment: paymentOrder });
   } catch (error) {
     const message = error instanceof Error ? error.message : "DELEGATED_MANDATE_EXECUTION_FAILED";
-    const status = message.includes("NOT_FOUND") ? 404 : message.includes("REMAINING_BUDGET") || message.includes("LIMIT") || message.includes("NOT_ALLOWED") || message.includes("EXPIRED") || message.includes("REVOKED") || message.includes("EXHAUSTED") ? 409 : message.includes("POLICY_BLOCKED") ? 422 : 400;
+    const status = message.includes("NOT_FOUND") ? 404 : message.includes("REMAINING_BUDGET") || message.includes("LIMIT") || message.includes("NOT_ALLOWED") || message.includes("EXPIRED") || message.includes("REVOKED") || message.includes("EXHAUSTED") ? 409 : message.includes("POLICY_BLOCKED") ? 422 : message.includes("RAZORPAY") ? 503 : 400;
     return response.status(status).json({ error: message, mode: "delegated_autonomous" });
   }
 });
@@ -165,61 +160,28 @@ app.post("/v1/delegated-mandates/settle/:transactionId", async (request, respons
 
 app.post("/v1/mandates/:authorizationId/razorpay-order", async (request, response) => {
   const providedSecret = request.header("x-mandate-gateway-secret") ?? "";
-  if (!providedSecret || providedSecret !== config.internalGatewaySecret) {
-    return response.status(401).json({ error: "UNAUTHORIZED_MANDATE_PAYMENT" });
-  }
-
+  if (!providedSecret || providedSecret !== config.internalGatewaySecret) return response.status(401).json({ error: "UNAUTHORIZED_MANDATE_PAYMENT" });
   try {
     const authorizationId = request.params.authorizationId?.trim();
     const transactionId = typeof request.body?.transactionId === "string" ? request.body.transactionId.trim() : "";
     if (!authorizationId || !transactionId) return response.status(400).json({ error: "MANDATE_PAYMENT_BINDING_REQUIRED" });
-
     const transaction = getTransaction(transactionId);
     if (!transaction) return response.status(404).json({ error: "TRANSACTION_NOT_FOUND" });
-
     const authorization = transaction.mandateAuthorization;
-    if (!authorization || authorization.authorizationId !== authorizationId) {
-      return response.status(409).json({ error: "MANDATE_AUTHORIZATION_MISMATCH" });
-    }
+    if (!authorization || authorization.authorizationId !== authorizationId) return response.status(409).json({ error: "MANDATE_AUTHORIZATION_MISMATCH" });
     if (authorization.status !== "authorized") return response.status(409).json({ error: "MANDATE_AUTHORIZATION_NOT_ACTIVE" });
     if (authorization.paymentRail !== "razorpay_standard_checkout") return response.status(422).json({ error: "UNSUPPORTED_PAYMENT_RAIL" });
     if (new Date(authorization.expiresAt).getTime() <= Date.now()) return response.status(400).json({ error: "MANDATE_AUTHORIZATION_EXPIRED" });
     if (authorization.merchantId !== transaction.quote.merchantId) return response.status(400).json({ error: "MANDATE_MERCHANT_MISMATCH" });
-    if (authorization.amount.currency !== transaction.quote.currency || authorization.amount.amountPaise !== transaction.quote.totalPaise) {
-      return response.status(400).json({ error: "MANDATE_AMOUNT_MISMATCH" });
-    }
-
-    const binding = canonicalizeCheckoutBinding({
-      checkoutId: authorization.checkoutSessionId,
-      merchantId: transaction.quote.merchantId,
-      quoteId: transaction.quote.quoteId,
-      currency: transaction.quote.currency,
-      totalPaise: transaction.quote.totalPaise,
-      lineItems: transaction.quote.lineItems,
-      expiresAt: transaction.quote.expiresAt,
-    });
+    if (authorization.amount.currency !== transaction.quote.currency || authorization.amount.amountPaise !== transaction.quote.totalPaise) return response.status(400).json({ error: "MANDATE_AMOUNT_MISMATCH" });
+    const binding = canonicalizeCheckoutBinding({ checkoutId: authorization.checkoutSessionId, merchantId: transaction.quote.merchantId, quoteId: transaction.quote.quoteId, currency: transaction.quote.currency, totalPaise: transaction.quote.totalPaise, lineItems: transaction.quote.lineItems, expiresAt: transaction.quote.expiresAt });
     const expectedCartHash = createHash("sha256").update(binding).digest("hex");
     if (expectedCartHash !== authorization.cartHash) return response.status(409).json({ error: "MANDATE_BINDING_MISMATCH" });
-
-    if (transaction.razorpayOrderId) {
-      return response.json({
-        transaction,
-        razorpayOrderId: transaction.razorpayOrderId,
-        checkout: getPublicConfig(),
-        mandateAuthorizationId: authorization.authorizationId,
-        alreadyCreated: true,
-      });
-    }
+    if (transaction.razorpayOrderId) return response.json({ transaction, razorpayOrderId: transaction.razorpayOrderId, checkout: getPublicConfig(), mandateAuthorizationId: authorization.authorizationId, alreadyCreated: true });
     if (transaction.state !== "policy_authorized") return response.status(409).json({ error: "TRANSACTION_NOT_AUTHORIZED", state: transaction.state });
-
     const order = await createOrder(transaction);
     const updated = attachRazorpayOrder(transaction.id, order.id);
-    return response.status(201).json({
-      transaction: updated,
-      order,
-      checkout: getPublicConfig(),
-      mandateAuthorizationId: authorization.authorizationId,
-    });
+    return response.status(201).json({ transaction: updated, order, checkout: getPublicConfig(), mandateAuthorizationId: authorization.authorizationId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "MANDATE_PAYMENT_BRIDGE_FAILED";
     return response.status(message.includes("NOT_CONFIGURED") ? 503 : 422).json({ error: message });
@@ -232,9 +194,7 @@ initializePersistence()
     return hydrateDelegatedMandatesFromPersistence();
   })
   .then(() => {
-    app.listen(config.port, () => {
-      console.log(`MANDATE gateway listening on http://localhost:${config.port}`);
-    });
+    app.listen(config.port, () => console.log(`MANDATE gateway listening on http://localhost:${config.port}`));
   })
   .catch((error) => {
     console.error("MANDATE gateway startup failed", error);
