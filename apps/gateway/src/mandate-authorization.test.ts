@@ -50,7 +50,7 @@ async function withMerchantFetch(q: CheckoutQuote, fn: () => Promise<void>): Pro
 
 test("authorizes a fresh checkout only when the mandate and binding match", async () => {
   const q = quote();
-  const checkout = { ...binding(), quoteId: q.quoteId, merchantId: q.merchantId, lineItems: q.lineItems, totalPaise: q.totalPaise, expiresAt: q.expiresAt, cartHash: "" };
+  const checkout = { ...binding(), quoteId: q.quoteId, merchantId: q.merchantId, lineItems: q.lineItems, totalPaise: q.totalPaise, cartHash: "" };
   checkout.cartHash = createHash("sha256").update(canonicalizeCheckoutBinding({ ...checkout })).digest("hex");
   await withMerchantFetch(q, async () => {
     const mandateInput = mandate();
@@ -60,6 +60,7 @@ test("authorizes a fresh checkout only when the mandate and binding match", asyn
     assert.equal(result.checkoutMandate.cartHash, checkout.cartHash);
     assert.equal(result.paymentMandate.authorizationId, result.authorization.authorizationId);
     assert.equal(result.authorization.status, "authorized");
+    assert.equal(result.authorization.nonce, mandateInput.nonce);
     assert.match(result.bindingSignature, /^[a-f0-9]{64}$/);
   });
 });
@@ -110,7 +111,21 @@ test("re-runs the normal gateway policy before issuing payment authorization", a
   });
 });
 
-test("rejects replaying the same mandate nonce", async () => {
+test("reuses the same authorization for an exact same-checkout retry", async () => {
+  const q = quote();
+  const checkoutBase = { checkoutId: `cs_mandate_same_${randomUUID()}`, merchantId: q.merchantId, quoteId: q.quoteId, currency: "INR" as const, totalPaise: q.totalPaise, lineItems: q.lineItems, expiresAt: q.expiresAt };
+  const checkout = { ...checkoutBase, cartHash: createHash("sha256").update(canonicalizeCheckoutBinding(checkoutBase)).digest("hex") } satisfies MandateCheckoutBindingInput;
+  const userMandate = mandate();
+  await withMerchantFetch(q, async () => {
+    const first = await authorizeCheckout({ userMandate, checkout, paymentRail: "razorpay_standard_checkout" });
+    const second = await authorizeCheckout({ userMandate, checkout, paymentRail: "razorpay_standard_checkout" });
+    assert.equal(second.transaction.id, first.transaction.id);
+    assert.equal(second.authorization.authorizationId, first.authorization.authorizationId);
+    assert.equal(second.authorization.status, "authorized");
+  });
+});
+
+test("rejects replaying the same mandate nonce for a different checkout", async () => {
   const q = quote();
   const userMandate = mandate();
   const firstBase = { checkoutId: `cs_mandate_replay_a_${randomUUID()}`, merchantId: q.merchantId, quoteId: q.quoteId, currency: "INR" as const, totalPaise: q.totalPaise, lineItems: q.lineItems, expiresAt: q.expiresAt };
