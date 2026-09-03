@@ -125,5 +125,42 @@ export async function POST(request: Request) {
     });
   }
 
+  if (action === "authorized-test-order") {
+    const transactionsRequest = await jsonRequest(`${GATEWAY_INTERNAL_URL}/v1/transactions`, { method: "GET" });
+    const raw = transactionsRequest.body?.transactions;
+    const transactions = Array.isArray(raw) ? raw.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object")) : [];
+    const candidate = transactions.find((value) => {
+      const mandateAuthorization = value.mandateAuthorization;
+      return value.state === "policy_authorized" && mandateAuthorization && typeof mandateAuthorization === "object" && (mandateAuthorization as Record<string, unknown>).status === "authorized" && typeof (mandateAuthorization as Record<string, unknown>).authorizationId === "string";
+    });
+    if (!candidate) {
+      return NextResponse.json({ status: 412, body: { error: "NO_AUTHORIZED_MANDATE_TRANSACTION", next: "Run the flagship /negotiation flow through mandate authorization first; this demo will then reuse that real transaction." } });
+    }
+
+    const mandateAuthorization = candidate.mandateAuthorization as Record<string, unknown>;
+    const authorizationId = String(mandateAuthorization.authorizationId);
+    const transactionId = String(candidate.id);
+    const result = await callMcp(
+      {
+        jsonrpc: "2.0",
+        id: `lab-authorized-${transactionId}`,
+        method: "tools/call",
+        params: {
+          name: "mandate_razorpay_create_order",
+          arguments: { authorizationId, transactionId },
+        },
+      },
+      modernHeaders("tools/call", "mandate_razorpay_create_order"),
+    );
+
+    return NextResponse.json({
+      scenario: "REAL_RAZORPAY_TEST_MODE_AUTHORIZED",
+      transactionId,
+      authorizationId,
+      ...result,
+      proof: result.status >= 200 && result.status < 300 ? "AUTHORIZED_MCP_REQUEST_REACHED_RAZORPAY_TEST_MODE" : "AUTHORIZED_MCP_REQUEST_FAILED",
+    });
+  }
+
   return NextResponse.json({ error: "INVALID_MCP_LAB_ACTION" }, { status: 400 });
 }
