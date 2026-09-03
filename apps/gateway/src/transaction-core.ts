@@ -41,8 +41,21 @@ const validTransitions: Record<TransactionState, TransactionState[]> = {
   cancelled: [],
 };
 
+const pendingPersistence = new Set<Promise<void>>();
+
 function persist(label: string, operation: () => Promise<void>): void {
-  void operation().catch((error) => console.error(`Persistence write failed: ${label}`, error));
+  const task = operation();
+  pendingPersistence.add(task);
+  void task
+    .catch((error) => console.error(`Persistence write failed: ${label}`, error))
+    .finally(() => pendingPersistence.delete(task));
+}
+
+export async function flushPersistence(): Promise<void> {
+  const pending = [...pendingPersistence];
+  if (pending.length === 0) return;
+  await Promise.all(pending);
+  if (pendingPersistence.size > 0) await flushPersistence();
 }
 
 function addAudit(
