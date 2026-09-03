@@ -1,0 +1,51 @@
+name: One-shot durable acknowledgement migration
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: contains(github.event.head_commit.message, 'stage durable acknowledgement migration')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply durable acknowledgement boundary
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          tc = Path('apps/gateway/src/transaction-core.ts')
+          s = tc.read_text()
+          old = '''function persist(label: string, operation: () => Promise<void>): void {\n  void operation().catch((error) => console.error(`Persistence write failed: ${label}`, error));\n}\n'''
+          new = '''const pendingPersistence = new Set<Promise<void>>();\n\nfunction persist(label: string, operation: () => Promise<void>): void {\n  const task = operation();\n  pendingPersistence.add(task);\n  void task\n    .catch((error) => console.error(`Persistence write failed: ${label}`, error))\n    .finally(() => pendingPersistence.delete(task));\n}\n\nexport async function flushPersistence(): Promise<void> {\n  const pending = [...pendingPersistence];\n  if (pending.length === 0) return;\n  await Promise.all(pending);\n  if (pendingPersistence.size > 0) await flushPersistence();\n}\n'''
+          if old not in s:
+              raise SystemExit('transaction-core persist block not found')
+          tc.write_text(s.replace(old, new, 1))
+
+          app = Path('apps/gateway/src/app.ts')
+          s = app.read_text()
+          old_import = 'import { addWebhookAudit, attachRazorpayOrder, confirmOrder, findTransactionByRazorpayOrderId, getAllTransactions, getTimeline, getTransaction, hydrateTransactionStore, markCheckoutStarted, proposeTransaction, recordPayment, recordPaymentVerified, retryFailedTransaction } from "./transaction-core.js";'
+          new_import = 'import { addWebhookAudit, attachRazorpayOrder, confirmOrder, findTransactionByRazorpayOrderId, flushPersistence, getAllTransactions, getTimeline, getTransaction, hydrateTransactionStore, markCheckoutStarted, proposeTransaction, recordPayment, recordPaymentVerified, retryFailedTransaction } from "./transaction-core.js";'
+          if old_import not in s:
+              raise SystemExit('app transaction-core import not found')
+          s = s.replace(old_import, new_import, 1)
+          anchor = 'app.use(cors({ origin: [config.buyerAppOrigin, config.merchantAppOrigin] }));'
+          wrapper = '''app.use(cors({ origin: [config.buyerAppOrigin, config.merchantAppOrigin] })); app.use((_request, response, next) => { const originalJson = response.json.bind(response); response.json = ((body: unknown) => { void flushPersistence().then(() => originalJson(body)).catch((error) => { console.error("Persistence flush failed before response", error); response.status(503); originalJson({ error: "PERSISTENCE_UNAVAILABLE" }); }); return response; }) as typeof response.json; next(); });'''
+          if anchor not in s:
+              raise SystemExit('cors anchor not found')
+          app.write_text(s.replace(anchor, wrapper, 1))
+
+          marker = Path('.one-shot-durable-ack')
+          marker.unlink(missing_ok=True)
+          workflow = Path('.github/workflows/one-shot-durable-ack.yml')
+          workflow.unlink(missing_ok=True)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/gateway/src/transaction-core.ts apps/gateway/src/app.ts .one-shot-durable-ack .github/workflows/one-shot-durable-ack.yml
+          git commit -m "feat: wait for financial persistence before response"
+          git push origin HEAD:main
