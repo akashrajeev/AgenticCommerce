@@ -7,3 +7,41 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Transaction {
+  id                String        @id
+  state             String
+  intent            Json
+  quote             Json
+  policy            Json?
+  razorpayOrderId   String?       @unique @map("razorpay_order_id")
+  razorpayPaymentId String?       @map("razorpay_payment_id")
+  createdAt         DateTime      @map("created_at")
+  updatedAt         DateTime      @map("updated_at")
+  auditEvents       AuditEvent[]
+
+  @@map("transactions")
+}
+
+model AuditEvent {
+  id            String      @id
+  transactionId String      @map("transaction_id")
+  actor         String
+  action        String
+  reason        String
+  metadata      Json?
+  createdAt     DateTime    @map("created_at")
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([transactionId, createdAt])
+  @@map("audit_events")
+}
+
+model WebhookEvent {
+  dedupeKey          String   @id @map("dedupe_key")
+  eventName          String   @map("event_name")
+  razorpayOrderId    String?  @map("razorpay_order_id")
+  razorpayPaymentId  String?  @map("razorpay_payment_id")
+  receivedAt         DateTime @map("received_at")
+
+  @@map("webhook_events")
+}
