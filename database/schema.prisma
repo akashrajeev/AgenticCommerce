@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider            = "prisma-client"
+  output              = "../apps/gateway/src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model Transaction {
@@ -37,11 +39,11 @@ model AuditEvent {
 }
 
 model WebhookEvent {
-  dedupeKey          String   @id @map("dedupe_key")
-  eventName          String   @map("event_name")
-  razorpayOrderId    String?  @map("razorpay_order_id")
-  razorpayPaymentId  String?  @map("razorpay_payment_id")
-  receivedAt         DateTime @map("received_at")
+  dedupeKey         String   @id @map("dedupe_key")
+  eventName         String   @map("event_name")
+  razorpayOrderId   String?  @map("razorpay_order_id")
+  razorpayPaymentId String?  @map("razorpay_payment_id")
+  receivedAt        DateTime @map("received_at")
 
   @@map("webhook_events")
 }
