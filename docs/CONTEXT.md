@@ -12,15 +12,19 @@ Agentic commerce platform for Razorpay Track 01: AI Growth & Agentic Commerce.
 "The AI has intelligence, but it does not have payment authority."
 
 ## Current Architecture
-AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Model-backed Product Decision -> Agent Negotiation -> ACP Checkout Session -> Signed MANDATE Authorization -> Deterministic Policy Engine -> Transaction Authority -> Razorpay Test Mode -> Server Verification -> Webhooks -> Merchant Order -> Audit Trail
+AI Buyer -> Merchant Discovery -> Agent-readable Catalog -> Model-backed Product Decision -> Merchant Revenue Opportunity -> Agent Negotiation -> ACP Checkout Session -> Signed MANDATE Authorization -> Deterministic Policy Engine -> Transaction Authority -> Razorpay Test Mode -> Server Verification -> Webhooks -> Merchant Order -> Audit Trail
 
 For delegated/autonomous buying:
 
 User -> Delegated Mandate -> Buyer Agent -> Merchant Agent -> Merchant Quote/Offer -> MANDATE Boundary -> Transaction Authority -> Razorpay
 
+For growth:
+
+Base Product -> Merchant Recommendation -> Live Bundle Quote -> Buyer/User Approval -> Same MANDATE Policy -> Transaction Authority
+
 ## Trust Zones
 1. AI / probabilistic: reads merchant data and proposes/ranks purchases. It cannot authorize payment or expand authority.
-2. Agent commerce / merchant zone: buyer and merchant agents exchange intents/offers backed by live merchant facts. Neither agent directly creates Razorpay orders.
+2. Agent commerce / merchant zone: buyer and merchant agents exchange intents/offers backed by live merchant facts. Merchant growth recommendations are commercial proposals, not payment authorizations.
 3. MANDATE trusted control plane: verifies mandates, verifies merchant-issued offers, binds checkout state, revalidates product/inventory/quote, enforces deterministic policy, owns transaction state, creates Razorpay orders, verifies payments/webhooks and confirms merchant orders.
 4. Razorpay payment rail: Test Mode Orders, Standard Checkout, Payments, capture and Webhooks.
 
@@ -46,6 +50,8 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Agent -> Merchant Quote/Off
 - Delegated spending is reserved before execution and counted as spent only after authoritative confirmation.
 - An accepted merchant offer must match the merchant-issued negotiation record before a delegated authorization is created.
 - A changed negotiation payload under the same acceptance key is rejected as an idempotency conflict.
+- Growth recommendations cannot directly authorize or create payment orders.
+- Growth baskets are freshly quoted and pass through the same deterministic gateway policy as normal purchases.
 
 ## Implemented
 
@@ -63,6 +69,9 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Agent -> Merchant Quote/Off
 - Merchant-agent negotiation endpoint at `/api/agent/negotiate`.
 - Merchant negotiation attestation endpoint at `/api/agent/negotiate/:id`.
 - Merchant stores the exact offer set long enough for gateway attestation in the current single-node demo.
+- Agent-readable growth opportunity endpoint at `/api/agent/growth-opportunities`.
+- Growth opportunities combine recommendation scoring with real bundle quotes, projected basket value, incremental item value and budget fit.
+- Growth capability and endpoint are published in the merchant manifest.
 - ACP-shaped checkout session create/retrieve/update/complete/cancel endpoints.
 - ACP completion forwards signed mandate authorization to the gateway and returns a Razorpay Test Mode order reference as `ready_for_payment` rather than falsely claiming payment success.
 
@@ -77,6 +86,7 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Agent -> Merchant Quote/Off
 - Delegated-authority workspace at `/delegated-mandates` with mandate creation, budget view, autonomous execution, allow/block feedback and revocation.
 - Buyer-agent negotiation API at `/api/agent/negotiate`.
 - Negotiation console at `/negotiation` showing intent -> merchant offers -> buyer selection -> gateway acceptance -> Razorpay Test Mode.
+- Growth approval workspace at `/growth` showing recommendations, incremental value, projected basket and budget fit before routing the approved basket to the gateway.
 
 ### Gateway
 - Deterministic policy engine with budget, quantity, inventory, merchant, quote-validity and amount-integrity checks.
@@ -107,7 +117,7 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Agent -> Merchant Quote/Off
 - Negotiated acceptance replay handling plus idempotency conflict detection.
 
 ### Shared contracts
-- `packages/types` contains normalized commerce, negotiation, mandate, authorization and delegated execution types.
+- `packages/types` contains normalized commerce, growth, negotiation, mandate, authorization and delegated execution types.
 - `packages/schemas` contains corresponding Zod validation schemas.
 
 ### Infrastructure and validation
@@ -136,6 +146,8 @@ Delegated budget reservations use an atomic SQL update so multiple gateway insta
 
 Merchant negotiation state is currently in-memory on the merchant app. Production horizontal scaling should persist negotiation sessions and offer attestations.
 
+Merchant growth opportunity state itself is recomputed from current catalog/recommendation data; opportunity IDs and quote records are demo-runtime artifacts. The final checkout transaction remains gateway-owned.
+
 Merchant quote and ACP checkout-session stores remain in-memory and separate from gateway durability.
 
 ## Failure Recovery Contract
@@ -150,6 +162,7 @@ Merchant quote and ACP checkout-session stores remain in-memory and separate fro
 - Delegated payment attempts remain `reserved` until the underlying transaction reaches `order_confirmed` or `payment_failed`/`cancelled`, at which point the reservation is settled.
 - A merchant offer amount/item/merchant/quote change is rejected before delegated authorization.
 - Reusing an acceptance key with a different offer payload returns an idempotency conflict and does not create another transaction.
+- Growth approval re-fetches a live bundle quote before creating the gateway transaction intent.
 
 ## ACP / Phase 4 Flow
 ACP client
@@ -283,17 +296,61 @@ NO delegated authorization
 NO Razorpay order
 ```
 
+## Phase 7 Growth Flow
+
+The merchant can expose growth opportunities from a selected product:
+
+```text
+base product
+-> recommendation score
+-> upsell/cross-sell rationale
+-> live bundle quote
+-> projected basket
+-> incremental item value
+-> budget fit
+```
+
+Buyer page:
+
+```text
+http://localhost:3001/growth
+```
+
+Judge-facing sequence:
+
+```text
+SoundMax Pro
+        ↓
+Merchant recommends Arc Precision Mouse
+        ↓
++ incremental basket value
+        ↓
+Projected bundle quote
+        ↓
+BUDGET FIT
+        ↓
+User clicks “Approve & route through MANDATE”
+        ↓
+Fresh merchant quote
+        ↓
+Deterministic gateway policy
+        ↓
+ALLOWED or BLOCKED
+```
+
+The growth layer does not claim a trained uplift model. Recommendations remain deterministic catalog intelligence. The financial control boundary remains unchanged.
+
 ## Current Limitations
 - Merchant negotiation state, merchant quote state and ACP checkout-session persistence are still in-memory.
 - Delegated mandate creation/revocation is currently a demo-facing trusted control endpoint; a production deployment needs authenticated user/session identity and stronger multi-tenant authorization.
 - Persistent mandate nonce uniqueness for cryptographic Phase 4 authorizations remains transaction-backed but a horizontally scaled production implementation should use a dedicated database uniqueness boundary.
 - Merchant-agent offer authentication/signing is not yet implemented; current gateway attestation uses the merchant's internal service boundary and exact stored offer comparison.
 - Buyer/merchant negotiation is protocol-neutral demo infrastructure; full external A2A protocol conformance is not claimed.
+- Growth opportunities are deterministic catalog recommendations rather than learned conversion propensity or experiment-backed uplift estimates.
 - The Docker/Test Mode path still needs real local verification with developer-supplied Test credentials and public webhook delivery.
 - Buyer UI should refresh/poll after webhook-only payment state changes.
-- Revenue recommendations remain deterministic catalog intelligence rather than a complete campaign orchestrator.
 - Full ACP wire conformance is not claimed.
 - AP2 wire interoperability is not claimed.
 
 ## Next Step
-Phase 7: turn negotiation + recommendations into a complete growth orchestrator that can propose bundles/upsells, explain incremental revenue, obtain the required user/delegated approval, and route the resulting basket through the same MANDATE authority.
+Phase 8: production hardening — authenticated multi-tenant mandate management, persistent negotiation sessions/offer attestations, signed merchant-agent credentials, and a repeatable public-webhook Test Mode demo harness.
