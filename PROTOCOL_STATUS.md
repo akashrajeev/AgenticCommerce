@@ -8,9 +8,9 @@ This page prevents protocol-name drift and over-claiming. Each protocol is class
 | ACP | **Adapter target** | Capability document advertises the integration target; a working checkout-session adapter exists with idempotency/versioning and a deterministic MANDATE authorization boundary is available behind the adapter. | No claim of external ACP wire-level authorization interoperability yet. |
 | AP2 | **Semantic alignment target** | Checkout/payment mandate concepts, cart binding and gateway authorization artifacts are modeled for a later external credential adapter. | No claim of AP2 credential or signature interoperability yet. |
 | NPCI UAP | **Research / adapter-ready** | Delegated authority concepts are modeled and the capability registry can advertise future UAP support without granting it execution authority. | No claim of native UAP implementation; no public authoritative UAP specification was available during the current research pass. |
-| x402 | **Adapter target** | Shared payment-authorization boundary is designed so an x402 service-payment adapter can terminate at the same policy core. | No x402 wire-level payment implementation yet. |
+| x402 | **Implemented; Phase 10 experiment** | A standalone x402 v2 agent-service resource server emits `PAYMENT-REQUIRED`, accepts `PAYMENT-SIGNATURE`, verifies/settles through a configured facilitator, and enforces a signed MANDATE service authorization before settlement. | No claim that the repository is the x402 reference implementation; no claim of a completed live testnet settlement until configured and exercised. |
 | Razorpay Test Mode | **Implemented; Phase 8 UPI golden run in progress** | Real Orders, Standard Checkout, payment retrieval/capture, server-side checkout signature verification and signed webhooks. The flagship buyer flow routes payment-order creation through the mandate-gated gateway boundary. | The repository does not claim that a real UPI success/failure transaction has been executed until the Test Mode flow is exercised with configured credentials. Test Mode is not production payment processing. |
-| MANDATE MCP Policy Facade | **Implemented; Phase 9 experiment** | Exposes an MCP-compatible `/mcp` JSON-RPC tool surface for guarded Razorpay order/payment operations. Payment-changing tools terminate at MANDATE authorization and call the existing gateway rather than Razorpay directly. | Not the official Razorpay MCP server; no claim of full external MCP certification or direct upstream Razorpay MCP interoperability. |
+| MANDATE MCP Policy Facade | **Implemented; Phase 9 experiment** | Exposes an MCP-compatible `/mcp` JSON-RPC tool surface for guarded Razorpay order/payment operations, with the current stateless `2026-07-28` transport and explicit 2025 compatibility. Payment-changing tools terminate at MANDATE authorization and call the existing gateway rather than Razorpay directly. | Not the official Razorpay MCP server; no claim of full external MCP certification or direct upstream Razorpay MCP interoperability. |
 
 ## Phase progression
 
@@ -25,8 +25,8 @@ Phase 5  → autonomous bounded agent                  DONE
 Phase 6  → buyer ↔ merchant agent negotiation        DONE
 Phase 7  → campaign / growth orchestrator            DONE (growth opportunity loop)
 Phase 8  → Razorpay Test Mode UPI golden run          IN PROGRESS
-Phase 9  → guarded Razorpay MCP policy facade         IN PROGRESS / IMPLEMENTED EXPERIMENT
-Phase 10 → x402 agent-to-service experiment           PLANNED
+Phase 9  → guarded Razorpay MCP policy facade         IMPLEMENTED EXPERIMENT
+Phase 10 → x402 agent-to-service experiment           IMPLEMENTED EXPERIMENT
 Phase 11 → UAP adapter-ready / later integration      PLANNED
 Phase 12 → unified multi-protocol demo                PLANNED
 ```
@@ -103,7 +103,7 @@ The repository's synthetic webhook replay lab remains explicitly labeled as a se
 
 ## Phase 9 evidence
 
-The gateway workspace includes a dedicated MCP-compatible policy facade:
+The gateway workspace includes:
 
 ```text
 apps/gateway/src/mcp-server.ts
@@ -111,16 +111,16 @@ apps/gateway/src/mcp-server.test.ts
 docs/RAZORPAY-MCP.md
 ```
 
-The facade provides:
+The facade supports MCP `2026-07-28` stateless requests and explicit compatibility for older 2025 revisions. Modern requests use the protocol-version, method and tool-name headers required by the current transport. It provides:
 
 ```text
-POST /mcp
-  initialize
+server/discover
 tools/list
 tools/call
+ping
 ```
 
-and exposes guarded operations:
+and guarded operations:
 
 ```text
 mandate_razorpay_create_order
@@ -139,7 +139,44 @@ http://localhost:4100/mcp
 
 with bearer authentication through `MCP_AGENT_TOKEN` in production.
 
-This is a **policy facade experiment aligned to MCP transport/tool concepts**, not a claim that MANDATE is the official Razorpay MCP implementation or that it is fully interchangeable with Razorpay's upstream server.
+The buyer-facing `/mcp` lab demonstrates unauthenticated rejection, current-protocol discovery, guarded tool enumeration and an authorization-bound payment attempt that fails closed without a MANDATE authorization.
+
+## Phase 10 evidence
+
+The x402 experiment is implemented under `apps/service`:
+
+```text
+apps/service/src/x402.ts
+apps/service/src/server.ts
+apps/service/src/x402.test.ts
+docs/X402-AGENT-SERVICE.md
+```
+
+The resource server implements the x402 v2 HTTP exchange:
+
+```text
+GET /resource without payment
+→ HTTP 402
+→ PAYMENT-REQUIRED: Base64(PaymentRequired v2)
+
+retry with PAYMENT-SIGNATURE
+→ decode + validate x402 v2 payment requirements
+→ validate signed MANDATE service authorization
+→ facilitator /verify
+→ facilitator /settle
+→ PAYMENT-RESPONSE
+→ HTTP 200 resource
+```
+
+MANDATE service authority binds the service ID, network, asset, recipient, maximum atomic amount, expiry and nonce. The replay key is consumed only after successful settlement. The service uses the configured facilitator for actual x402 verification/settlement; it does not pretend an unconfigured local payment is real.
+
+The Compose stack exposes the experimental resource server at:
+
+```text
+http://localhost:4021/resource
+```
+
+and the buyer-facing `/x402` lab demonstrates the initial 402 challenge. 
 
 ## Rule for upgrading a status
 
