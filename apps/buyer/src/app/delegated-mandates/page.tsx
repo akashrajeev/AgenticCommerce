@@ -94,7 +94,7 @@ export default function DelegatedMandatesPage() {
       }
       setLastDecision({ allowed: true, amount: quote.totalPaise, transactionId: body.transaction?.id });
       await load();
-      setMessage(body.payment?.order?.id ? `Authorized and created Razorpay order ${body.payment.order.id}.` : "Authorized and bound to a trusted transaction. Razorpay credentials are not configured, so no external order was created.");
+      setMessage(body.payment?.order?.id ? `Authorized and created Razorpay order ${body.payment.order.id}.` : "Authorized and bound to a trusted transaction. Configure Razorpay Test Mode credentials to create the external order.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Delegated execution failed."); }
     finally { setBusy(false); }
   }
@@ -135,7 +135,7 @@ export default function DelegatedMandatesPage() {
             <div className="mandate-metrics"><div><span>Remaining</span><strong>{selected.remainingDisplay}</strong></div><div><span>Reserved</span><strong>₹{(selected.reservedPaise / 100).toFixed(2)}</strong></div><div><span>Executions</span><strong>{selected.executionCount}</strong></div><div><span>Blocked</span><strong>{selected.blockedCount}</strong></div></div>
             <div className="mandate-meta"><span className={`mandate-status ${selected.status}`}>{selected.status}</span><code>{selected.mandateId}</code><span>Expires {new Date(selected.expiresAt).toLocaleString()}</span></div>
             <div className="boundary-card"><span>BOUNDARY</span><strong>₹{(selected.maxSpendPerPurchase.amountPaise / 100).toFixed(2)} per purchase</strong><p>Merchant: {selected.merchantIds.join(", ") || "any"} · Product: {selected.allowedProductIds?.join(", ") || "any"}</p></div>
-            <div className="delegated-actions"><button disabled={busy || selected.status !== "active"} onClick={() => void execute(1)}>Run qualifying purchase<span>₹39.99? no — live quote</span></button><button disabled={busy || selected.status !== "active"} onClick={() => void execute(2)}>Test outside boundary<span>2 × approved item</span></button></div>
+            <div className="delegated-actions"><button disabled={busy || selected.status !== "active"} onClick={() => void execute(1)}>Run qualifying purchase<span>1 × approved product</span></button><button disabled={busy || selected.status !== "active"} onClick={() => void execute(2)}>Test outside boundary<span>2 × approved product</span></button></div>
             <button className="revoke-button" disabled={busy || selected.status !== "active"} onClick={() => void revoke()}>Revoke delegated authority</button>
             {lastDecision && <div className={`execution-result ${lastDecision.allowed ? "allowed" : "blocked"}`}><strong>{lastDecision.allowed ? "ALLOWED" : "BLOCKED"}</strong><span>₹{(lastDecision.amount / 100).toFixed(2)}</span><code>{lastDecision.transactionId ?? lastDecision.code}</code></div>}
           </> : <div className="delegated-empty">Create a mandate to unlock bounded autonomous execution.</div>}
