@@ -5,6 +5,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { config } from "./config.js";
+import { claimWebhookEvent, initializePersistence, releaseWebhookEvent } from "./persistence.js";
 import {
   addWebhookAudit,
   attachRazorpayOrder,
@@ -13,6 +14,7 @@ import {
   getAllTransactions,
   getTimeline,
   getTransaction,
+  hydrateTransactionStore,
   markCheckoutStarted,
   proposeTransaction,
   recordPayment,
@@ -29,8 +31,6 @@ import {
 } from "./razorpay.js";
 
 const processedWebhookKeys = new Set<string>();
-// Protect the in-memory dedupe boundary from concurrent duplicate deliveries.
-// This remains process-local until the PostgreSQL webhook repository is wired in.
 const processingWebhookKeys = new Set<string>();
 
 function parsePurchaseIntent(body: unknown): Omit<PurchaseIntent, "id"> {
@@ -60,14 +60,7 @@ async function confirmMerchantOrder(transaction: Transaction) {
   const response = await fetch(`${base}/api/agent/orders/confirm`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-mandate-gateway-secret": config.internalGatewaySecret },
-    body: JSON.stringify({
-      transactionId: transaction.id,
-      productId: transaction.intent.productId,
-      quantity: transaction.intent.quantity,
-      amountPaise: transaction.quote.totalPaise,
-      razorpayOrderId: transaction.razorpayOrderId,
-      razorpayPaymentId: transaction.razorpayPaymentId,
-    }),
+    body: JSON.stringify({ transactionId: transaction.id, productId: transaction.intent.productId, quantity: transaction.intent.quantity, amountPaise: transaction.quote.totalPaise, razorpayOrderId: transaction.razorpayOrderId, razorpayPaymentId: transaction.razorpayPaymentId }),
   });
   if (!response.ok) throw new Error("MERCHANT_ORDER_CONFIRMATION_FAILED");
   return response.json();
@@ -75,17 +68,8 @@ async function confirmMerchantOrder(transaction: Transaction) {
 
 async function reconcileCapturedPayment(transactionId: string, paymentId: string, source: "checkout" | "webhook") {
   const transaction = getTransactionOrThrow(transactionId);
-
-  // A webhook can legitimately arrive after the browser has already completed the
-  // synchronous verification path. Preserve the webhook evidence in the audit trail.
   if (transaction.state === "order_confirmed") {
-    if (source === "webhook") {
-      addWebhookAudit(transactionId, "WEBHOOK_RECONCILIATED", "Razorpay confirmed a captured payment for an already-confirmed transaction; no state change was required.", {
-        razorpayPaymentId: paymentId,
-        source,
-        alreadyConfirmed: true,
-      });
-    }
+    if (source === "webhook") addWebhookAudit(transactionId, "WEBHOOK_RECONCILIATED", "Razorpay confirmed a captured payment for an already-confirmed transaction; no state change was required.", { razorpayPaymentId: paymentId, source, alreadyConfirmed: true });
     return transaction;
   }
 
@@ -94,15 +78,7 @@ async function reconcileCapturedPayment(transactionId: string, paymentId: string
   const verified = getTransactionOrThrow(transactionId);
   if (verified.state !== "payment_verified" && verified.state !== "order_confirmed") return verified;
 
-  addWebhookAudit(
-    transactionId,
-    source === "webhook" ? "WEBHOOK_RECONCILIATED" : "CHECKOUT_RECONCILIATED",
-    source === "webhook"
-      ? "Razorpay webhook confirmed the captured payment and triggered reconciliation."
-      : "Browser checkout callback was verified and triggered payment reconciliation.",
-    { razorpayPaymentId: paymentId, source },
-  );
-
+  addWebhookAudit(transactionId, source === "webhook" ? "WEBHOOK_RECONCILIATED" : "CHECKOUT_RECONCILIATED", source === "webhook" ? "Razorpay webhook confirmed the captured payment and triggered reconciliation." : "Browser checkout callback was verified and triggered payment reconciliation.", { razorpayPaymentId: paymentId, source });
   if (verified.state === "payment_verified") await confirmMerchantOrder(verified);
   return confirmOrder(transactionId);
 }
@@ -130,9 +106,23 @@ export function createApp() {
   app.use(helmet());
   app.use(cors({ origin: [config.buyerAppOrigin, config.merchantAppOrigin] }));
 
+  let persistenceReady: Promise<void> | undefined;
+  app.use(async (_request, _response, next) => {
+    try {
+      if (!persistenceReady) {
+        persistenceReady = initializePersistence().then((seed) => hydrateTransactionStore(seed));
+      }
+      await persistenceReady;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/v1/webhooks/razorpay", express.raw({ type: "application/json", limit: "256kb" }), async (request, response) => {
     let dedupeKey: string | undefined;
     let claimedProcessing = false;
+    let persistentClaimed = false;
     try {
       const rawBody = Buffer.isBuffer(request.body) ? request.body.toString("utf8") : "";
       const signature = request.header("x-razorpay-signature") ?? "";
@@ -154,16 +144,15 @@ export function createApp() {
       const event = payload.event ?? "unknown";
       const payment = payload.payload?.payment?.entity;
       const orderId = payment?.order_id ?? payload.payload?.order?.entity?.id;
-      const transaction = orderId ? findTransactionByRazorpayOrderId(orderId) : undefined;
 
-      if (transaction) {
-        addWebhookAudit(transaction.id, "WEBHOOK_RECEIVED", `Razorpay delivered ${event}.`, {
-          event,
-          razorpayOrderId: orderId ?? null,
-          razorpayPaymentId: payment?.id ?? null,
-          webhookEventId: dedupeKey,
-        });
+      persistentClaimed = await claimWebhookEvent({ dedupeKey, eventName: event, razorpayOrderId: orderId ?? null, razorpayPaymentId: payment?.id ?? null });
+      if (!persistentClaimed) {
+        processedWebhookKeys.add(dedupeKey);
+        return response.status(200).json({ received: true, duplicate: true });
       }
+
+      const transaction = orderId ? findTransactionByRazorpayOrderId(orderId) : undefined;
+      if (transaction) addWebhookAudit(transaction.id, "WEBHOOK_RECEIVED", `Razorpay delivered ${event}.`, { event, razorpayOrderId: orderId ?? null, razorpayPaymentId: payment?.id ?? null, webhookEventId: dedupeKey });
 
       if (transaction && payment?.id) {
         if (event === "payment.failed") recordPayment(transaction.id, payment.id, "failed");
@@ -179,6 +168,7 @@ export function createApp() {
       return response.status(200).json({ received: true, event, matchedTransaction: Boolean(transaction) });
     } catch (error) {
       console.error("Razorpay webhook processing failed", error);
+      if (persistentClaimed && dedupeKey) await releaseWebhookEvent(dedupeKey).catch(() => undefined);
       return response.status(500).json({ error: "WEBHOOK_PROCESSING_FAILED" });
     } finally {
       if (claimedProcessing && dedupeKey && !processedWebhookKeys.has(dedupeKey)) processingWebhookKeys.delete(dedupeKey);
