@@ -39,7 +39,7 @@ export type TransactionMandateAuthorization = {
   amount: MoneyAmount;
   cartHash: string;
   paymentRail: string;
-  status: "authorized";
+  status: "authorized" | "declined" | "consumed" | "expired";
   createdAt: string;
   expiresAt: string;
   nonce: string;
