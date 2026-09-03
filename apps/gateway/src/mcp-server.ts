@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import express, { type Request } from "express";
 import { config } from "./config.js";
+import { fetchOrder, fetchPayment } from "./razorpay.js";
 
 const app = express();
 const port = Number.parseInt(process.env.MCP_PORT ?? "4100", 10);
@@ -14,6 +15,7 @@ const tools = [
   { name: "mandate_razorpay_fetch_order", description: "Retrieve gateway-authoritative evidence for a Razorpay order after proving the order ID is bound to the supplied transaction.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, orderId: { type: "string" } }, required: ["transactionId", "orderId"] } },
   { name: "mandate_razorpay_fetch_payment", description: "Retrieve gateway-authoritative evidence for a Razorpay payment after proving the payment ID is bound to the supplied transaction.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["transactionId", "paymentId"] } },
   { name: "mandate_razorpay_capture_payment", description: "Capture a Razorpay payment through the existing gateway transaction boundary. A valid MANDATE authorization and matching transaction are mandatory.", inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["authorizationId", "transactionId", "paymentId"] } },
+  { name: "mandate_razorpay_verify_settlement", description: "Re-read the bound Razorpay order and payment from Razorpay Test Mode and prove amount, order binding, and captured-payment state before treating merchant revenue as payment-verified.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, orderId: { type: "string" }, paymentId: { type: "string" } }, required: ["transactionId", "orderId", "paymentId"] } },
 ];
 
 function jsonRpc(id: unknown, result: unknown) { return { jsonrpc: "2.0", id, result }; }
@@ -40,6 +42,35 @@ async function callTool(name: string, args: Record<string, unknown>) {
     case "mandate_razorpay_fetch_order": { const transactionId = requiredString(args, "transactionId"); const orderId = requiredString(args, "orderId"); const transaction = findTransaction(await gatewayJson("/v1/transactions"), transactionId); assertTransactionBinding(transaction, transactionId); if (transaction.razorpayOrderId !== orderId) throw new Error("RAZORPAY_ORDER_BINDING_MISMATCH"); return transactionEvidence(transactionId, transaction); }
     case "mandate_razorpay_fetch_payment": { const transactionId = requiredString(args, "transactionId"); const paymentId = requiredString(args, "paymentId"); const transaction = findTransaction(await gatewayJson("/v1/transactions"), transactionId); assertTransactionBinding(transaction, transactionId); if (transaction.razorpayPaymentId !== paymentId) throw new Error("RAZORPAY_PAYMENT_BINDING_MISMATCH"); return transactionEvidence(transactionId, transaction); }
     case "mandate_razorpay_capture_payment": { const authorizationId = requiredString(args, "authorizationId"); const transactionId = requiredString(args, "transactionId"); const paymentId = requiredString(args, "paymentId"); const transaction = findTransaction(await gatewayJson("/v1/transactions"), transactionId); assertTransactionBinding(transaction, transactionId, authorizationId); if (transaction.razorpayPaymentId && transaction.razorpayPaymentId !== paymentId) throw new Error("RAZORPAY_PAYMENT_BINDING_MISMATCH"); return gatewayJson(`/v1/transactions/${encodeURIComponent(transactionId)}/capture`, { method: "POST", body: JSON.stringify({ paymentId, amountPaise: transaction.quote && typeof transaction.quote === "object" ? (transaction.quote as Record<string, unknown>).totalPaise : undefined }) }); }
+    case "mandate_razorpay_verify_settlement": {
+      const transactionId = requiredString(args, "transactionId");
+      const orderId = requiredString(args, "orderId");
+      const paymentId = requiredString(args, "paymentId");
+      const transaction = findTransaction(await gatewayJson("/v1/transactions"), transactionId);
+      assertTransactionBinding(transaction, transactionId);
+      if (transaction.razorpayOrderId !== orderId) throw new Error("RAZORPAY_ORDER_BINDING_MISMATCH");
+      if (transaction.razorpayPaymentId !== paymentId) throw new Error("RAZORPAY_PAYMENT_BINDING_MISMATCH");
+      const quote = transaction.quote && typeof transaction.quote === "object" ? transaction.quote as Record<string, unknown> : {};
+      const expectedAmount = typeof quote.totalPaise === "number" ? quote.totalPaise : NaN;
+      const [order, payment] = await Promise.all([fetchOrder(orderId), fetchPayment(paymentId)]);
+      const amountMatches = order.amount === expectedAmount && payment.amount === expectedAmount;
+      const orderMatches = order.receipt === transactionId && payment.order_id === orderId;
+      const captured = payment.status === "captured" && (order.status === "paid" || order.amount_paid === order.amount);
+      if (!amountMatches) throw new Error("RAZORPAY_LIVE_AMOUNT_MISMATCH");
+      if (!orderMatches) throw new Error("RAZORPAY_LIVE_BINDING_MISMATCH");
+      if (!captured) throw new Error("RAZORPAY_LIVE_PAYMENT_NOT_CAPTURED");
+      return {
+        verified: true,
+        testMode: true,
+        transactionId,
+        orderId,
+        paymentId,
+        amountPaise: expectedAmount,
+        currency: payment.currency,
+        order: { id: order.id, status: order.status, amount: order.amount, amountPaid: order.amount_paid, receipt: order.receipt },
+        payment: { id: payment.id, status: payment.status, amount: payment.amount, currency: payment.currency, orderId: payment.order_id, method: payment.method ?? null },
+      };
+    }
     default: throw new Error("TOOL_NOT_FOUND");
   }
 }
