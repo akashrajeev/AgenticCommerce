@@ -10,15 +10,19 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "productId is required" }, { status: 400 });
   }
 
-  const maxSpendPaise = maxSpendRaw ? Number(maxSpendRaw) : undefined;
-  if (maxSpendRaw && (!Number.isSafeInteger(maxSpendPaise) || maxSpendPaise < 0)) {
+  const maxSpendPaise = maxSpendRaw === null ? undefined : Number(maxSpendRaw);
+  if (maxSpendRaw !== null && (!Number.isSafeInteger(maxSpendPaise) || maxSpendPaise < 0)) {
     return NextResponse.json({ error: "maxSpendPaise must be a non-negative integer" }, { status: 400 });
   }
 
   try {
+    const recommendations = maxSpendPaise === undefined
+      ? getRevenueRecommendations(productId)
+      : getRevenueRecommendations(productId, maxSpendPaise);
+
     return NextResponse.json({
       sourceProductId: productId,
-      recommendations: getRevenueRecommendations(productId, maxSpendPaise),
+      recommendations,
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
