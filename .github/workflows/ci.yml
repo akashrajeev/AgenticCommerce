@@ -10,6 +10,20 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mandate
+          POSTGRES_PASSWORD: mandate
+          POSTGRES_DB: mandate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mandate -d mandate"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
@@ -29,6 +43,11 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+      - name: Prisma persistence smoke test
+        run: npm run prisma:smoke -w @mandate/gateway
+        env:
+          DATABASE_URL: postgresql://mandate:mandate@localhost:5432/mandate
 
       - name: Build
         run: npm run build
