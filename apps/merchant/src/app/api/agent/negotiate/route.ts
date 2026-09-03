@@ -47,17 +47,6 @@ function rankCandidates(products: typeof catalog, maxSpendPaise: number) {
 
 export function OPTIONS() { return new Response(null, { status: 204, headers: corsHeaders }); }
 
-export async function GET(
-  _request: Request,
-  context: { params: Promise<{ id: string }> },
-) {
-  cleanupExpiredNegotiations();
-  const { id } = await context.params;
-  const negotiation = (await import("../../../../lib/agent-negotiation")).getStoredNegotiation(id);
-  if (!negotiation) return Response.json({ error: "NEGOTIATION_NOT_FOUND" }, { status: 404, headers: corsHeaders });
-  return Response.json(negotiation, { headers: { ...corsHeaders, "cache-control": "no-store" } });
-}
-
 export async function POST(request: Request) {
   cleanupExpiredNegotiations();
   const body = await request.json().catch(() => null) as NegotiationRequest | null;
