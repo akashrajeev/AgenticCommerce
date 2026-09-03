@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import type { CheckoutLineItem, MerchantOffer } from "@mandate/types";
+import type { CheckoutLineItem, MerchantOffer, PaymentAuthorization, Transaction } from "@mandate/types";
 import { canonicalizeCheckoutBinding } from "@mandate/types";
 import { config } from "./config.js";
 import { executeDelegatedMandate, delegatedMandateStats } from "./delegated-mandates.js";
+import { getTransaction } from "./transaction-core.js";
 
-const accepted = new Map<string, { transactionId: string; executionId: string; authorizationId: string }>();
+const accepted = new Map<string, { transactionId: string; executionId: string; authorizationId: string; offer: MerchantOffer }>();
 
 type MerchantQuoteResponse = {
   quote?: {
@@ -20,6 +21,17 @@ type MerchantQuoteResponse = {
 type MerchantNegotiationResponse = {
   negotiationId: string;
   offers: MerchantOffer[];
+};
+
+type NegotiatedAcceptanceResult = {
+  replayed: boolean;
+  transactionId: string;
+  executionId: string;
+  authorizationId: string;
+  offer: MerchantOffer;
+  transaction: Transaction;
+  authorization: PaymentAuthorization;
+  mandate: ReturnType<typeof delegatedMandateStats>;
 };
 
 function sameItems(a: CheckoutLineItem[], b: CheckoutLineItem[]): boolean {
@@ -58,10 +70,35 @@ async function fetchAuthoritativeQuote(offer: MerchantOffer) {
   return quote;
 }
 
-export async function acceptNegotiatedOffer(input: { negotiationId: string; mandateId: string; offer: MerchantOffer }) {
+export async function acceptNegotiatedOffer(input: { negotiationId: string; mandateId: string; offer: MerchantOffer }): Promise<NegotiatedAcceptanceResult> {
   const key = `${input.negotiationId}:${input.mandateId}:${input.offer.offerId}`;
   const existing = accepted.get(key);
-  if (existing) return { replayed: true, ...existing, mandate: delegatedMandateStats(input.mandateId) };
+  if (existing) {
+    const transaction = getTransaction(existing.transactionId);
+    if (!transaction?.mandateAuthorization) throw new Error("NEGOTIATION_TRANSACTION_NOT_FOUND");
+    return {
+      replayed: true,
+      transactionId: existing.transactionId,
+      executionId: existing.executionId,
+      authorizationId: existing.authorizationId,
+      offer: existing.offer,
+      transaction,
+      authorization: {
+        authorizationId: existing.authorizationId,
+        mandateId: input.mandateId,
+        checkoutSessionId: transaction.mandateAuthorization.checkoutSessionId,
+        merchantId: transaction.mandateAuthorization.merchantId,
+        amount: transaction.mandateAuthorization.amount,
+        cartHash: transaction.mandateAuthorization.cartHash,
+        paymentRail: transaction.mandateAuthorization.paymentRail,
+        status: transaction.mandateAuthorization.status,
+        createdAt: transaction.mandateAuthorization.createdAt,
+        expiresAt: transaction.mandateAuthorization.expiresAt,
+        nonce: transaction.mandateAuthorization.nonce,
+      },
+      mandate: delegatedMandateStats(input.mandateId),
+    };
+  }
 
   if (!input.negotiationId.trim()) throw new Error("INVALID_NEGOTIATION_ID");
   if (!input.mandateId.trim()) throw new Error("INVALID_NEGOTIATION_MANDATE");
@@ -79,7 +116,7 @@ export async function acceptNegotiatedOffer(input: { negotiationId: string; mand
   const binding = { checkoutId, merchantId: quote.merchantId, quoteId: quote.quoteId, currency: quote.currency, totalPaise: quote.totalPaise, lineItems: quote.lineItems, expiresAt };
   const cartHash = createHash("sha256").update(canonicalizeCheckoutBinding(binding)).digest("hex");
   const result = await executeDelegatedMandate(input.mandateId, { ...binding, cartHash });
-  const acceptedResult = {
+  const acceptedResult: NegotiatedAcceptanceResult = {
     replayed: false,
     transactionId: result.authorization.transaction.id,
     executionId: result.execution.executionId,
@@ -93,6 +130,7 @@ export async function acceptNegotiatedOffer(input: { negotiationId: string; mand
     transactionId: acceptedResult.transactionId,
     executionId: acceptedResult.executionId,
     authorizationId: acceptedResult.authorizationId,
+    offer: issued,
   });
   return acceptedResult;
 }
