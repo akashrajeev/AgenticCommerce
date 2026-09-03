@@ -1,13 +1,5 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
-
-export type MerchantAgentCredential = {
-  algorithm: "Ed25519";
-  keyId: string;
-  merchantId: string;
-  agentId: string;
-  issuer: string;
-  publicKeyPem: string;
-};
+import type { MerchantAgentCredential } from "@mandate/types";
 
 type MerchantAgentIdentity = {
   privateKey: ReturnType<typeof createPrivateKey>;
