@@ -10,19 +10,30 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "productId is required" }, { status: 400 });
   }
 
-  const maxSpendPaise = maxSpendRaw === null ? undefined : Number(maxSpendRaw);
-  if (maxSpendRaw !== null && (!Number.isSafeInteger(maxSpendPaise) || maxSpendPaise < 0)) {
+  if (maxSpendRaw === null) {
+    try {
+      return NextResponse.json({
+        sourceProductId: productId,
+        recommendations: getRevenueRecommendations(productId),
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "PRODUCT_NOT_FOUND") {
+        return NextResponse.json({ error: "Product not found" }, { status: 404 });
+      }
+      return NextResponse.json({ error: "Unable to generate recommendations" }, { status: 500 });
+    }
+  }
+
+  const parsedMaxSpendPaise = Number(maxSpendRaw);
+  if (!Number.isSafeInteger(parsedMaxSpendPaise) || parsedMaxSpendPaise < 0) {
     return NextResponse.json({ error: "maxSpendPaise must be a non-negative integer" }, { status: 400 });
   }
 
   try {
-    const recommendations = maxSpendPaise === undefined
-      ? getRevenueRecommendations(productId)
-      : getRevenueRecommendations(productId, maxSpendPaise);
-
     return NextResponse.json({
       sourceProductId: productId,
-      recommendations,
+      recommendations: getRevenueRecommendations(productId, parsedMaxSpendPaise),
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
