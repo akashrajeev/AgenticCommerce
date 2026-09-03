@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRevenueRecommendations } from "../../../../../../lib/revenue.js";
+import { getRevenueRecommendations } from "../../../../lib/revenue.js";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
