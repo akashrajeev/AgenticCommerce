@@ -59,6 +59,7 @@ services:
       PORT: 3000
       GATEWAY_INTERNAL_URL: http://gateway:4000
       INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:-mandate-local-gateway}
+      ACP_API_KEY: ${ACP_API_KEY:-mandate-local-acp}
     ports:
       - "3000:3000"
     depends_on:
