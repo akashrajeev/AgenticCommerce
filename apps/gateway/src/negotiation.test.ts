@@ -46,7 +46,7 @@ test("accepts an authoritative merchant offer through a delegated mandate", asyn
   });
 });
 
-test("replays the same offer idempotently but rejects an attested amount tamper", async () => {
+test("replays the same offer idempotently and rejects changed payloads", async () => {
   await withMerchantFetch(async () => {
     const mandate = await createDelegatedMandate({ subjectId: "user_001", agentId: "buyer-agent:mandate-demo", purpose: "Negotiated headphones", merchantIds: ["mandate-market"], allowedProductIds: ["hp-001"], maxSpendPerPurchase: { currency: "INR", amountPaise: 500000 }, totalBudget: { currency: "INR", amountPaise: 1000000 }, expiresAt: new Date(Date.now() + 60_000).toISOString() });
     const first = await acceptNegotiatedOffer({ negotiationId: "neg_002", mandateId: mandate.mandateId, offer: offer() });
@@ -54,7 +54,10 @@ test("replays the same offer idempotently but rejects an attested amount tamper"
     assert.equal(replay.replayed, true);
     assert.equal(replay.transactionId, first.transaction.id);
 
-    const tampered = { ...offer(), amount: { currency: "INR" as const, amountPaise: 481882 } };
-    await assert.rejects(() => acceptNegotiatedOffer({ negotiationId: "neg_003", mandateId: mandate.mandateId, offer: tampered }), /NEGOTIATED_OFFER_ATTESTATION_MISMATCH/);
+    const changed = { ...offer(), amount: { currency: "INR" as const, amountPaise: 481882 } };
+    await assert.rejects(() => acceptNegotiatedOffer({ negotiationId: "neg_002", mandateId: mandate.mandateId, offer: changed }), /NEGOTIATION_IDEMPOTENCY_CONFLICT/);
+
+    const attestationTamper = { ...offer(), amount: { currency: "INR" as const, amountPaise: 481882 } };
+    await assert.rejects(() => acceptNegotiatedOffer({ negotiationId: "neg_003", mandateId: mandate.mandateId, offer: attestationTamper }), /NEGOTIATED_OFFER_ATTESTATION_MISMATCH/);
   });
 });
