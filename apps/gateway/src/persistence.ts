@@ -8,6 +8,7 @@ import type {
   TransactionMandateAuthorization,
 } from "@mandate/types";
 import { config } from "./config.js";
+import { loadPrismaGatewayState } from "./persistence-prisma-read.js";
 
 type TransactionRow = {
   id: string;
@@ -130,12 +131,11 @@ export async function initializePersistence(): Promise<{ enabled: boolean; trans
   await sql`CREATE TABLE IF NOT EXISTS delegated_mandate_executions (execution_id TEXT PRIMARY KEY, mandate_id TEXT NOT NULL REFERENCES delegated_mandates(mandate_id) ON DELETE CASCADE, transaction_id TEXT NOT NULL UNIQUE, amount_paise BIGINT NOT NULL, status TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL)`;
   await sql`CREATE INDEX IF NOT EXISTS delegated_mandates_subject_idx ON delegated_mandates(subject_id, issued_at DESC)`;
   await sql`CREATE INDEX IF NOT EXISTS delegated_executions_mandate_idx ON delegated_mandate_executions(mandate_id, created_at DESC)`;
-  const transactions = await sql<TransactionRow[]>`SELECT id, state, intent, quote, policy, mandate_authorization, razorpay_order_id, razorpay_payment_id, created_at, updated_at FROM transactions ORDER BY created_at ASC`;
-  const auditEvents = await sql<AuditRow[]>`SELECT id, transaction_id, actor, action, reason, metadata, created_at FROM audit_events ORDER BY created_at ASC`;
+  const { transactions, auditEvents } = await loadPrismaGatewayState();
   const orders = await sql<MerchantOrderRow[]>`SELECT merchant_order_id, transaction_id, merchant_id, product_id, quantity, line_items, amount_paise, base_amount_paise, incremental_revenue_paise, currency, razorpay_order_id, razorpay_payment_id, created_at FROM merchant_orders ORDER BY created_at ASC`;
   merchantOrders.clear(); for (const row of orders) merchantOrders.set(row.merchant_order_id, { merchantOrderId: row.merchant_order_id, transactionId: row.transaction_id, merchantId: row.merchant_id, productId: row.product_id, quantity: row.quantity, lineItems: row.line_items, amountPaise: numberValue(row.amount_paise), baseAmountPaise: numberValue(row.base_amount_paise), incrementalRevenuePaise: numberValue(row.incremental_revenue_paise), currency: row.currency, razorpayOrderId: row.razorpay_order_id, razorpayPaymentId: row.razorpay_payment_id, createdAt: iso(row.created_at) });
   lastHydratedAt = new Date().toISOString(); hydratedRecordCounts = { transactions: transactions.length, auditEvents: auditEvents.length, merchantOrders: orders.length };
-  return { enabled: true, transactions: transactions.map((row) => ({ id: row.id, state: row.state, intent: row.intent, quote: row.quote, policy: row.policy ?? undefined, mandateAuthorization: row.mandate_authorization ?? undefined, razorpayOrderId: row.razorpay_order_id ?? undefined, razorpayPaymentId: row.razorpay_payment_id ?? undefined, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) })), auditEvents: auditEvents.map((row) => ({ id: row.id, transactionId: row.transaction_id, actor: row.actor, action: row.action, reason: row.reason, metadata: row.metadata ?? undefined, createdAt: iso(row.created_at) })) };
+  return { enabled: true, transactions, auditEvents };
 }
 export async function saveTransaction(transaction: Transaction): Promise<void> { if (!sql) return; await sql`INSERT INTO transactions (id, state, intent, quote, policy, mandate_authorization, razorpay_order_id, razorpay_payment_id, created_at, updated_at) VALUES (${transaction.id}, ${transaction.state}, ${sql.json(transaction.intent)}, ${sql.json(transaction.quote)}, ${transaction.policy ? sql.json(transaction.policy) : null}, ${transaction.mandateAuthorization ? sql.json(transaction.mandateAuthorization) : null}, ${transaction.razorpayOrderId ?? null}, ${transaction.razorpayPaymentId ?? null}, ${transaction.createdAt}, ${transaction.updatedAt}) ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, intent = EXCLUDED.intent, quote = EXCLUDED.quote, policy = EXCLUDED.policy, mandate_authorization = EXCLUDED.mandate_authorization, razorpay_order_id = EXCLUDED.razorpay_order_id, razorpay_payment_id = EXCLUDED.razorpay_payment_id, updated_at = EXCLUDED.updated_at`; }
 export async function saveAuditEvent(event: AuditEvent): Promise<void> { if (!sql) return; await sql`INSERT INTO audit_events (id, transaction_id, actor, action, reason, metadata, created_at) VALUES (${event.id}, ${event.transactionId}, ${event.actor}, ${event.action}, ${event.reason}, ${event.metadata ? sql.json(event.metadata) : null}, ${event.createdAt}) ON CONFLICT (id) DO NOTHING`; }
