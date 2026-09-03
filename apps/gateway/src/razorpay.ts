@@ -31,9 +31,16 @@ export type RazorpayPayment = {
 
 type RazorpayError = { error?: { code?: string; description?: string } };
 
+export function isRazorpayTestMode(): boolean {
+  return Boolean(config.razorpayKeyId && config.razorpayKeyId.startsWith("rzp_test_"));
+}
+
 function requireCredentials() {
   if (!config.razorpayKeyId || !config.razorpayKeySecret) {
     throw new Error("RAZORPAY_TEST_CREDENTIALS_NOT_CONFIGURED");
+  }
+  if (!config.razorpayKeyId.startsWith("rzp_test_")) {
+    throw new Error("RAZORPAY_TEST_MODE_REQUIRED");
   }
 }
 
@@ -116,5 +123,6 @@ export function verifyWebhookSignature(rawBody: string, signature: string): bool
 
 export function getPublicConfig() {
   if (!config.razorpayKeyId) throw new Error("RAZORPAY_TEST_KEY_ID_NOT_CONFIGURED");
+  if (!config.razorpayKeyId.startsWith("rzp_test_")) throw new Error("RAZORPAY_TEST_MODE_REQUIRED");
   return { keyId: config.razorpayKeyId, currency: "INR" as const };
 }
