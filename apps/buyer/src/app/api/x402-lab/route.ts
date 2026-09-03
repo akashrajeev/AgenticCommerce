@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 const X402_SERVICE_URL = (process.env.X402_SERVICE_INTERNAL_URL ?? process.env.X402_INTERNAL_URL ?? "http://localhost:4021").replace(/\/$/, "");
 
 export async function POST(request: Request) {
-  const body = await request.json().catch(() => null) as { action?: unknown; paymentPayload?: unknown; subjectId?: unknown } | null;
+  const body = await request.json().catch(() => null) as { action?: unknown; paymentPayload?: unknown } | null;
   const action = typeof body?.action === "string" ? body.action : "";
 
   if (action === "challenge") {
@@ -39,17 +39,17 @@ export async function POST(request: Request) {
     const payload = body.paymentPayload as Record<string, unknown>;
     const payloadBody = payload.payload && typeof payload.payload === "object" && !Array.isArray(payload.payload) ? payload.payload as Record<string, unknown> : null;
     const authorization = payloadBody?.authorization && typeof payloadBody.authorization === "object" && !Array.isArray(payloadBody.authorization) ? payloadBody.authorization as Record<string, unknown> : null;
-    const subjectId = typeof body.subjectId === "string" ? body.subjectId.trim() : typeof authorization?.from === "string" ? authorization.from.trim() : "";
-    if (!subjectId) return NextResponse.json({ status: 400, body: { error: "X402_WALLET_SUBJECT_REQUIRED" } }, { status: 400 });
+    const payer = typeof authorization?.from === "string" ? authorization.from.trim() : "";
+    if (!payer) return NextResponse.json({ status: 400, body: { error: "X402_PAYER_REQUIRED" } }, { status: 400 });
     try {
-      const mandateResponse = await fetch(`${X402_SERVICE_URL}/demo/mandate?subjectId=${encodeURIComponent(subjectId)}`, { cache: "no-store" });
+      const mandateResponse = await fetch(`${X402_SERVICE_URL}/demo/mandate?subjectId=${encodeURIComponent(payer)}`, { cache: "no-store" });
       const mandateBody = await mandateResponse.json().catch(() => null) as { mandate?: unknown; error?: unknown } | null;
       if (!mandateResponse.ok || !mandateBody?.mandate) return NextResponse.json({ status: mandateResponse.status, body: mandateBody ?? { error: "X402_DEMO_MANDATE_UNAVAILABLE" } });
 
       const paymentHeader = Buffer.from(JSON.stringify(body.paymentPayload), "utf8").toString("base64");
       const mandateHeader = Buffer.from(JSON.stringify(mandateBody.mandate), "utf8").toString("base64");
       const response = await fetch(`${X402_SERVICE_URL}/resource`, { method: "GET", headers: { "payment-signature": paymentHeader, "x-mandate-service-mandate": mandateHeader }, cache: "no-store" });
-      return NextResponse.json({ status: response.status, paymentResponse: response.headers.get("payment-response"), body: await response.json().catch(() => null), demoCredential: { enabled: true, subjectId, issuer: "ephemeral self-signed local demo credential" } });
+      return NextResponse.json({ status: response.status, paymentResponse: response.headers.get("payment-response"), body: await response.json().catch(() => null), demoCredential: { enabled: true, subjectId: payer, issuer: "ephemeral self-signed local demo credential" } });
     } catch (error) { return NextResponse.json({ status: 502, body: { error: error instanceof Error ? error.message : "X402_LIVE_SETTLEMENT_FAILED" } }); }
   }
 
