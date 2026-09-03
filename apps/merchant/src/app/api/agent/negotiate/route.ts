@@ -1,9 +1,9 @@
 import type { MerchantOffer } from "@mandate/types";
 import { buildQuote, MERCHANT_ID, catalog } from "../../../../lib/catalog";
-import { cleanupExpiredNegotiations, saveNegotiation } from "../../../../lib/agent-negotiation";
+import { cleanupExpiredNegotiations, persistNegotiation, saveNegotiation } from "../../../../lib/agent-negotiation";
 import { signMerchantOffer } from "../../../../lib/agent-identity";
 
- type NegotiationRequest = {
+type NegotiationRequest = {
   intentId?: unknown;
   buyerAgentId?: unknown;
   purpose?: unknown;
@@ -91,6 +91,14 @@ export async function POST(request: Request) {
     ...offers.map((offer) => ({ turnId: `turn_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`, actor: "merchant_agent" as const, type: "offer" as const, offerId: offer.offerId, message: `Merchant agent offers ${offer.items.map((item) => item.productId).join(", ")} at ₹${(offer.amount.amountPaise / 100).toFixed(2)} using quote ${offer.quoteId}.`, createdAt: new Date().toISOString() })),
   ];
   const intent = { intentId, buyer: { agentId: buyerAgentId || "buyer-agent:mandate-demo", agentType: "buyer" as const, name: "MANDATE Buyer Agent" }, merchantId: MERCHANT_ID, purpose, items: offers[0]!.items.map((item) => ({ productId: item.productId, quantity: item.quantity })), maxSpend: { currency: "INR" as const, amountPaise: maxSpendPaise }, currency: "INR" as const, constraints: { category: category ?? null }, sourceProtocol, createdAt, expiresAt };
-  saveNegotiation({ negotiationId, intent, merchant: merchantAgent, offers, offerAttestations, turns, createdAt, expiresAt });
-  return Response.json({ negotiationId, intent, merchant: merchantAgent, offers, offerAttestations, turns }, { headers: { ...corsHeaders, "cache-control": "no-store" } });
+  const negotiation = { negotiationId, intent, merchant: merchantAgent, offers, offerAttestations, turns, createdAt, expiresAt };
+
+  saveNegotiation(negotiation);
+  try {
+    await persistNegotiation(negotiation);
+  } catch {
+    return Response.json({ error: "NEGOTIATION_SESSION_PERSIST_FAILED", negotiationId }, { status: 503, headers: corsHeaders });
+  }
+
+  return Response.json(negotiation, { headers: { ...corsHeaders, "cache-control": "no-store" } });
 }
