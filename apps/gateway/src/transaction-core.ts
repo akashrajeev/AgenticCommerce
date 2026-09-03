@@ -104,19 +104,14 @@ export function evaluatePolicy(input: PurchaseIntentInput, snapshot: MerchantSna
 
   const spendPass = total <= input.maxSpendPaise;
   checks.push({ rule: "MAX_SPEND", result: spendPass ? "PASS" : "FAIL", observed: `₹${(total / 100).toFixed(0)}`, expected: `≤ ₹${(input.maxSpendPaise / 100).toFixed(0)}`, reason: spendPass ? "Quote is within the user's spending limit." : "Quote exceeds the user's spending limit." });
-
   const quantityPass = quantity <= config.maxQuantity;
   checks.push({ rule: "QUANTITY_LIMIT", result: quantityPass ? "PASS" : "FAIL", observed: String(quantity), expected: `≤ ${config.maxQuantity}`, reason: quantityPass ? "Requested quantity is within the policy limit." : "Requested quantity exceeds the policy limit." });
-
   const inventoryPass = snapshot.inventory >= quantity;
   checks.push({ rule: "INVENTORY", result: inventoryPass ? "PASS" : "FAIL", observed: `${snapshot.inventory} available`, expected: `${quantity} required`, reason: inventoryPass ? "Inventory can satisfy the request." : "There is not enough inventory to satisfy the request." });
-
   const merchantPass = snapshot.quote.merchantId === input.merchantId;
   checks.push({ rule: "MERCHANT", result: merchantPass ? "PASS" : "FAIL", observed: snapshot.quote.merchantId, expected: input.merchantId, reason: merchantPass ? "Quote belongs to the requested merchant." : "Quote merchant does not match the purchase intent." });
-
   const quotePass = new Date(snapshot.quote.expiresAt).getTime() > now;
   checks.push({ rule: "QUOTE_VALIDITY", result: quotePass ? "PASS" : "FAIL", observed: snapshot.quote.expiresAt, expected: "expires in the future", reason: quotePass ? "Quote is still valid." : "Quote has expired." });
-
   const lineItem = snapshot.quote.lineItems[0];
   const amountPass = lineItem?.productId === input.productId && lineItem?.quantity === input.quantity && lineItem?.unitPricePaise === snapshot.product.pricePaise;
   checks.push({ rule: "AMOUNT_INTEGRITY", result: amountPass ? "PASS" : "FAIL", observed: lineItem ? `${lineItem.quantity} × ${lineItem.unitPricePaise}` : "missing line item", expected: `${input.quantity} × ${snapshot.product.pricePaise}`, reason: amountPass ? "Server quote matches the current product price and quantity." : "Quote line item does not match the current product data." });
@@ -145,13 +140,11 @@ export async function proposeTransaction(input: PurchaseIntentInput): Promise<Tr
   transaction.quote = snapshot.quote;
   transitionTransaction(id, "price_verified");
   addAudit(id, "gateway", "PRICE_VERIFIED", "The gateway re-read the merchant price, inventory and quote before policy evaluation.", { totalPaise: snapshot.quote.totalPaise });
-
   transitionTransaction(id, "policy_pending");
   const policy = evaluatePolicy(input, snapshot);
   transaction.policy = policy;
   persist(`transaction:${id}:policy`, () => saveTransaction(transaction));
   addAudit(id, "policy_engine", policy.decision === "ALLOW" ? "POLICY_ALLOWED" : "POLICY_BLOCKED", policy.decision === "ALLOW" ? "All mandatory transaction policies passed." : "At least one mandatory transaction policy failed.");
-
   transitionTransaction(id, policy.decision === "ALLOW" ? "policy_authorized" : "policy_blocked");
   return transactions.get(id)!;
 }
@@ -163,7 +156,6 @@ export function transitionTransaction(id: string, nextState: TransactionState): 
   if (terminalStates.has(current.state)) throw new Error(`INVALID_TRANSITION:${current.state}->${nextState}`);
   const previousState = current.state;
   if (!validTransitions[previousState].includes(nextState)) throw new Error(`INVALID_TRANSITION:${previousState}->${nextState}`);
-
   current.state = nextState;
   current.updatedAt = new Date().toISOString();
   transactions.set(id, current);
@@ -199,7 +191,6 @@ export function markCheckoutStarted(id: string): Transaction {
 export function recordPayment(id: string, paymentId: string, status: "authorized" | "captured" | "failed"): Transaction {
   const transaction = getTransaction(id);
   if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
-
   const currentState = transaction.state;
   const nonRegressibleStates = new Set<TransactionState>(["payment_captured", "payment_verified", "order_confirmed"]);
   if (status === "failed" && nonRegressibleStates.has(currentState)) {
@@ -210,17 +201,14 @@ export function recordPayment(id: string, paymentId: string, status: "authorized
     addAudit(id, "razorpay", "PAYMENT_FAILED_DUPLICATE", "Razorpay repeated a failed payment event; transaction state was unchanged.", { razorpayPaymentId: paymentId });
     return transaction;
   }
-
   transaction.razorpayPaymentId = paymentId;
   transactions.set(id, transaction);
   persist(`transaction:${id}:payment`, () => saveTransaction(transaction));
-
   if (status === "failed") {
     transitionTransaction(id, "payment_failed");
     addAudit(id, "razorpay", "PAYMENT_FAILED", "Razorpay reported a failed payment.", { razorpayPaymentId: paymentId });
     return getTransaction(id)!;
   }
-
   if (transaction.state === "checkout_started") transitionTransaction(id, "payment_authorized");
   if (status === "captured" && getTransaction(id)?.state === "payment_authorized") transitionTransaction(id, "payment_captured");
   addAudit(id, "razorpay", status === "captured" ? "PAYMENT_CAPTURED" : "PAYMENT_AUTHORIZED", `Razorpay reported the payment as ${status}.`, { razorpayPaymentId: paymentId });
@@ -245,6 +233,21 @@ export function confirmOrder(id: string): Transaction {
   transitionTransaction(id, "order_confirmed");
   addAudit(id, "merchant", "ORDER_CONFIRMED", "The merchant order was confirmed only after payment verification.");
   return getTransaction(id)!;
+}
+
+export async function retryFailedTransaction(id: string): Promise<Transaction> {
+  const transaction = getTransaction(id);
+  if (!transaction) throw new Error("TRANSACTION_NOT_FOUND");
+  if (transaction.state !== "payment_failed") throw new Error("TRANSACTION_NOT_RETRYABLE");
+  addAudit(id, "gateway", "PAYMENT_RETRY_REQUESTED", "A failed payment is being retried as a new transaction so the original failed attempt remains immutable.", { retryOfTransactionId: id });
+  return proposeTransaction({
+    merchantId: transaction.intent.merchantId,
+    productId: transaction.intent.productId,
+    quantity: transaction.intent.quantity,
+    maxSpendPaise: transaction.intent.maxSpendPaise,
+    reason: transaction.intent.reason,
+    quoteId: transaction.intent.quoteId,
+  });
 }
 
 export function getTransaction(id: string): Transaction | undefined { return transactions.get(id); }
