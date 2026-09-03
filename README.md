@@ -65,7 +65,7 @@ The buyer consumes those APIs instead of scraping the storefront.
 
 The buyer's model-backed planning endpoint reads the merchant manifest/catalog and returns a structured JSON plan constrained to valid catalog product IDs. The model can recommend and rank; it cannot authorize payment or change the hard spending limit.
 
-The current implementation uses the OpenAI Responses API with structured JSON output. Configure the model with `OPENAI_MODEL`; the default is the current cost-sensitive `gpt-5.6-luna` setting used by this demo.
+The current implementation uses the OpenAI-compatible Responses API. Configure `OPENAI_BASE_URL` and `OPENAI_MODEL` for the provider/model you want to use; the demo has been validated with Groq's OpenAI-compatible Responses endpoint as well as the standard OpenAI endpoint.
 
 ## Razorpay Test Mode setup
 
@@ -102,7 +102,7 @@ Prerequisites:
 - npm 10+
 - Docker Desktop
 - Razorpay Test Mode credentials
-- OpenAI API key for the model-backed buyer
+- API key for the configured model provider
 
 Create local environment files from the examples, then run:
 
