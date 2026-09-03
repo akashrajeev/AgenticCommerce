@@ -17,11 +17,47 @@ import {
   settleDelegatedExecution,
 } from "./delegated-mandates.js";
 import { initializePersistence } from "./persistence.js";
+import { loadNegotiationSession, saveNegotiationSession } from "./persistence-prisma.js";
 import { attachRazorpayOrder, getTransaction, hydrateTransactionStore } from "./transaction-core.js";
 import { requireTenantPrincipal, type TenantPrincipal } from "./tenant-auth.js";
 import { createOrder, getPublicConfig } from "./razorpay.js";
 
 const app = createApp();
+
+app.post("/v1/negotiation-sessions", async (request, response) => {
+  try {
+    internalSecretOrThrow(request, "UNAUTHORIZED_NEGOTIATION_SESSION");
+    const body = request.body as Record<string, unknown> | null;
+    if (!body || typeof body.negotiationId !== "string" || !body.negotiationId.trim() || !Array.isArray(body.offers) || !Array.isArray(body.turns) || !body.intent || !body.merchant || typeof body.createdAt !== "string" || typeof body.expiresAt !== "string") return response.status(400).json({ error: "INVALID_NEGOTIATION_SESSION" });
+    const session = {
+      negotiationId: body.negotiationId.trim(),
+      intent: body.intent as Record<string, unknown>,
+      merchant: body.merchant as { agentId: "merchant-agent:mandate-market"; agentType: "merchant"; name: string; issuer: string },
+      offers: body.offers as import("@mandate/types").MerchantOffer[],
+      offerAttestations: Array.isArray(body.offerAttestations) ? body.offerAttestations as import("@mandate/types").MerchantOfferAttestation[] : undefined,
+      turns: body.turns as Array<Record<string, unknown>>,
+      createdAt: body.createdAt,
+      expiresAt: body.expiresAt,
+    };
+    await saveNegotiationSession(session);
+    return response.status(201).json({ saved: true, negotiationId: session.negotiationId });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "NEGOTIATION_SESSION_SAVE_FAILED";
+    return response.status(message.startsWith("UNAUTHORIZED") ? 401 : 422).json({ error: message });
+  }
+});
+
+app.get("/v1/negotiation-sessions/:negotiationId", async (request, response) => {
+  try {
+    internalSecretOrThrow(request, "UNAUTHORIZED_NEGOTIATION_SESSION");
+    const session = await loadNegotiationSession(request.params.negotiationId);
+    if (!session) return response.status(404).json({ error: "NEGOTIATION_SESSION_NOT_FOUND" });
+    return response.json({ session });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "NEGOTIATION_SESSION_LOAD_FAILED";
+    return response.status(message === "NEGOTIATION_SESSION_NOT_FOUND" ? 404 : 401).json({ error: message });
+  }
+});
 
 app.post("/v1/mandates/authorize", async (request, response) => {
   const providedSecret = request.header("x-mandate-gateway-secret") ?? "";
