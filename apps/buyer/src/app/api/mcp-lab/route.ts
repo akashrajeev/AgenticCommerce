@@ -33,6 +33,14 @@ async function jsonRequest(url: string, init: RequestInit): Promise<{ status: nu
   }
 }
 
+async function latestTransaction(): Promise<Record<string, unknown> | null> {
+  const request = await jsonRequest(`${GATEWAY_INTERNAL_URL}/v1/transactions`, { method: "GET" });
+  if (request.status >= 400 || !request.body) return null;
+  const raw = request.body.transactions;
+  const transactions = Array.isArray(raw) ? raw.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object")) : [];
+  return transactions[transactions.length - 1] ?? null;
+}
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { action?: unknown } | null;
   const action = typeof body?.action === "string" ? body.action : "";
@@ -76,6 +84,22 @@ export async function POST(request: Request) {
       { jsonrpc: "2.0", id: "lab-tools", method: "tools/list" },
       modernHeaders("tools/list"),
     ));
+  }
+
+  if (action === "explain") {
+    const candidate = await latestTransaction();
+    if (!candidate || typeof candidate.id !== "string") {
+      return NextResponse.json({ status: 412, body: { error: "NO_TRANSACTION_TO_EXPLAIN", next: "Run the flagship negotiation flow first; this read-only proof reuses that real gateway transaction." } });
+    }
+    return NextResponse.json({
+      scenario: "READ_ONLY_MCP_EXPLANATION",
+      transactionId: candidate.id,
+      ...await callMcp(
+        { jsonrpc: "2.0", id: `lab-explain-${candidate.id}`, method: "tools/call", params: { name: "mandate_razorpay_explain_transaction", arguments: { transactionId: candidate.id } } },
+        modernHeaders("tools/call", "mandate_razorpay_explain_transaction"),
+      ),
+      proof: "READ_ONLY_NO_PAYMENT_SIDE_EFFECT",
+    });
   }
 
   if (action === "guard") {
