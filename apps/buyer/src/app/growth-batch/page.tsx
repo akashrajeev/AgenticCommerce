@@ -34,7 +34,11 @@ export default function GrowthBatchPage() {
       const body = await response.json() as { candidates?: Candidate[]; campaigns?: string[]; error?: string };
       if (!response.ok) throw new Error(body.error ?? "Unable to load batch candidates.");
       setCandidates(body.candidates ?? []);
-      if (Array.isArray(body.campaigns) && body.campaigns.length) { setCampaigns(body.campaigns); if (!body.campaigns.includes(campaignId)) setCampaignId(body.campaigns[0]); }
+      if (Array.isArray(body.campaigns) && body.campaigns.length) {
+        setCampaigns(body.campaigns);
+        const firstCampaign = body.campaigns[0];
+        if (firstCampaign && !body.campaigns.includes(campaignId)) setCampaignId(firstCampaign);
+      }
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to load batch candidates."); }
     finally { setLoading(false); }
   }
