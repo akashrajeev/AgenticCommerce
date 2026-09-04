@@ -31,6 +31,14 @@ async function mcpCall(name: string, args: Record<string, unknown>) {
   });
 }
 
+function isVerifiedSettlement(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const result = (body as Record<string, unknown>).result;
+  if (!result || typeof result !== "object") return false;
+  const structured = (result as Record<string, unknown>).structuredContent;
+  return Boolean(structured && typeof structured === "object" && (structured as Record<string, unknown>).verified === true && (structured as Record<string, unknown>).testMode === true);
+}
+
 export async function GET() {
   const [gatewayHealth, merchantHealth, mcpHealth, x402Health, x402Facilitator, protocolMatrix, transactionsBody, ordersBody] = await Promise.all([
     getJson(`${gateway}/health`),
@@ -50,14 +58,19 @@ export async function GET() {
 
   const rawOrders = ordersBody.body && typeof ordersBody.body === "object" ? (ordersBody.body as Record<string, unknown>).orders : [];
   const orders = Array.isArray(rawOrders) ? rawOrders.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object")) : [];
-  const verifiedCandidates = orders.filter((order) => typeof order.razorpayOrderId === "string" && typeof order.razorpayPaymentId === "string").slice(0, 5);
+  const verifiedCandidates = orders.filter((order) => typeof order.razorpayOrderId === "string" && typeof order.razorpayPaymentId === "string").slice(0, 10);
   const proofs = await Promise.all(verifiedCandidates.map(async (order) => {
     const transactionId = typeof order.transactionId === "string" ? order.transactionId : "";
     const orderId = typeof order.razorpayOrderId === "string" ? order.razorpayOrderId : "";
     const paymentId = typeof order.razorpayPaymentId === "string" ? order.razorpayPaymentId : "";
-    return transactionId && orderId && paymentId ? await mcpCall("mandate_razorpay_verify_settlement", { transactionId, orderId, paymentId }) : { ok: false, status: 0, body: { error: "MISSING_RAZORPAY_IDENTIFIERS" } };
+    const proof = transactionId && orderId && paymentId ? await mcpCall("mandate_razorpay_verify_settlement", { transactionId, orderId, paymentId }) : { ok: false, status: 0, body: null };
+    return { order, proof };
   }));
-  const verifiedPayments = proofs.filter((proof) => proof.ok && (proof.body as Record<string, unknown> | null)?.result && typeof (proof.body as Record<string, unknown>).result === "object" && ((proof.body as Record<string, unknown>).result as Record<string, unknown>).structuredContent && ((proof.body as Record<string, unknown>).result as Record<string, unknown>).structuredContent && (((proof.body as Record<string, unknown>).result as Record<string, unknown>).structuredContent as Record<string, unknown>).verified === true && (((proof.body as Record<string, unknown>).result as Record<string, unknown>).structuredContent as Record<string, unknown>).testMode === true).length;
+  const verifiedPayments = proofs.filter((entry) => entry.proof.ok && isVerifiedSettlement(entry.proof.body)).length;
+  const growthUpliftPaise = proofs.reduce((total, entry) => {
+    if (!entry.proof.ok || !isVerifiedSettlement(entry.proof.body)) return total;
+    return total + (typeof entry.order.incrementalRevenuePaise === "number" ? entry.order.incrementalRevenuePaise : 0);
+  }, 0);
 
   const gatewayBody = gatewayHealth.body && typeof gatewayHealth.body === "object" ? gatewayHealth.body as Record<string, unknown> : {};
   const mcpBody = mcpHealth.body && typeof mcpHealth.body === "object" ? mcpHealth.body as Record<string, unknown> : {};
@@ -81,7 +94,8 @@ export async function GET() {
       merchantOrders: orders.length,
       razorpayVerifiedPayments: verifiedPayments,
       protocolCount: protocolMatrix.ok && protocolMatrix.body && typeof protocolMatrix.body === "object" ? ((protocolMatrix.body as Record<string, unknown>).summary as Record<string, unknown> | undefined)?.total ?? 0 : 0,
+      growthUpliftPaise,
     },
-    links: { negotiation: "/negotiation", growth: "/growth", campaigns: "http://localhost:3000/campaigns", mcp: "/mcp/authorized", x402: "/x402", protocols: "/protocols", proof: "/proof" },
+    links: { negotiation: "/negotiation", growth: "/growth", growthBatch: "/growth-batch", campaigns: `${merchant}/campaign-orchestrator`, mcp: "/mcp/authorized", x402: "/x402", protocols: "/protocols", proof: "/proof" },
   });
 }
