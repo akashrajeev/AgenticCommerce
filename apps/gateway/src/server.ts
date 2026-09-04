@@ -20,9 +20,42 @@ import { initializePersistence } from "./persistence.js";
 import { loadNegotiationSession, saveNegotiationSession } from "./persistence-prisma.js";
 import { attachRazorpayOrder, getTransaction, hydrateTransactionStore } from "./transaction-core.js";
 import { requireTenantPrincipal, type TenantPrincipal } from "./tenant-auth.js";
-import { createOrder, getPublicConfig } from "./razorpay.js";
+import { createOrder, fetchOrder, fetchPayment, getPublicConfig, isRazorpayTestMode, probeTestModeCredentials } from "./razorpay.js";
 
 const app = createApp();
+
+app.get("/v1/internal/razorpay/status", async (request, response) => {
+  const providedSecret = request.header("x-mandate-gateway-secret") ?? "";
+  if (!providedSecret || providedSecret !== config.internalGatewaySecret) return response.status(401).json({ error: "UNAUTHORIZED_INTERNAL_RAZORPAY" });
+  const base = { testMode: isRazorpayTestMode(), configured: Boolean(config.razorpayKeyId && config.razorpayKeySecret) };
+  if (request.query.deep !== "1") return response.json(base);
+  try {
+    const probe = await probeTestModeCredentials();
+    return response.json({ ...base, testMode: probe.testMode, probe });
+  } catch (error) {
+    return response.status(503).json({ ...base, error: error instanceof Error ? error.message : "RAZORPAY_PROBE_FAILED" });
+  }
+});
+
+app.get("/v1/internal/razorpay/orders/:orderId", async (request, response) => {
+  const providedSecret = request.header("x-mandate-gateway-secret") ?? "";
+  if (!providedSecret || providedSecret !== config.internalGatewaySecret) return response.status(401).json({ error: "UNAUTHORIZED_INTERNAL_RAZORPAY" });
+  try {
+    return response.json({ order: await fetchOrder(request.params.orderId) });
+  } catch (error) {
+    return response.status(502).json({ error: error instanceof Error ? error.message : "RAZORPAY_ORDER_FETCH_FAILED" });
+  }
+});
+
+app.get("/v1/internal/razorpay/payments/:paymentId", async (request, response) => {
+  const providedSecret = request.header("x-mandate-gateway-secret") ?? "";
+  if (!providedSecret || providedSecret !== config.internalGatewaySecret) return response.status(401).json({ error: "UNAUTHORIZED_INTERNAL_RAZORPAY" });
+  try {
+    return response.json({ payment: await fetchPayment(request.params.paymentId) });
+  } catch (error) {
+    return response.status(502).json({ error: error instanceof Error ? error.message : "RAZORPAY_PAYMENT_FETCH_FAILED" });
+  }
+});
 
 app.post("/v1/negotiation-sessions", async (request, response) => {
   try {
