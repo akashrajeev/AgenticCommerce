@@ -186,10 +186,23 @@ export async function POST(request: Request) {
         continue;
       }
 
+      const orderId = paymentOrder.order.id;
+      if (typeof orderId !== "string" || !orderId.trim()) {
+        const executionFailure: GrowthExperimentExecution = {
+          ...executionStart,
+          status: "FAILED",
+          lastError: "MCP_CREATE_ORDER_INVALID_ID",
+          updatedAt: new Date().toISOString(),
+        };
+        await createOrUpdateGrowthExperimentExecution(executionFailure);
+        results.push({ ...paymentOrder, ok: false, error: executionFailure.lastError, execution: executionFailure });
+        continue;
+      }
+
       const executionReady: GrowthExperimentExecution = {
         ...executionStart,
         status: "PAYMENT_PENDING",
-        razorpayOrderId: paymentOrder.order.id,
+        razorpayOrderId: orderId,
         lastError: undefined,
         updatedAt: new Date().toISOString(),
       };
