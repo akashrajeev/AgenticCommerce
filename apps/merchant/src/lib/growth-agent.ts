@@ -294,11 +294,14 @@ function defaultGrowthAgentPlanner(): GrowthAgentPlanner {
         store: false,
         parallel_tool_calls: false,
         tool_choice: "auto",
-        reasoning: { effort: "none" },
         instructions: "You are the MANDATE merchant growth agent. Your job is to pursue the merchant objective by choosing exactly one allowed growth tool at a time. You must inspect before acting: get_campaign establishes the campaign, list_opportunities observes eligible commercial opportunities, inspect_inventory checks live availability, and prepare_offer creates a fresh quote. You may repeat observation tools when a prior result requires it. Never invent IDs, prices, inventory, payment state or revenue. Never call or request a payment tool. There is no payment authority in your tool set. An offer is only a proposal; payment authorization belongs to MANDATE. Prefer the minimum number of tool calls needed to reach OFFER_READY. If a tool reports an error, reconsider the next allowed tool rather than inventing a result. Call exactly one function tool and no prose when another tool is needed.",
-        input: history.length === 0
-          ? [{ role: "user", content: [{ type: "input_text", text: JSON.stringify({ objective: run.objective, campaignId: run.campaignId, maxSpendPaise: run.maxSpendPaise, availableTools }) }] }]
-          : history,
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: JSON.stringify({ objective: run.objective, campaignId: run.campaignId, maxSpendPaise: run.maxSpendPaise, availableTools }) }],
+          },
+          ...history,
+        ],
         tools: GROWTH_AGENT_TOOLS,
       }),
       cache: "no-store",
