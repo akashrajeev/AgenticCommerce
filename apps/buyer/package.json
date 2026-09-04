@@ -8,14 +8,14 @@
     "build": "next build",
     "start": "next start --port 3001",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/lib/buyer-agent.test.ts"
+    "test": "tsx --test src/lib/buyer-agent.test.ts src/lib/buyer-agent-tools.test.ts"
   },
   "dependencies": {
     "@mandate/shared": "0.1.0",
     "@mandate/types": "0.1.0",
     "next": "^15.1.3",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.0.2",
+    "react-dom": "^19.0.2"
   },
   "devDependencies": {
     "@types/react": "^19.0.2",
