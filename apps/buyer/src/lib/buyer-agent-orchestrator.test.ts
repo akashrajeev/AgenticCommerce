@@ -60,7 +60,7 @@ test.afterEach(() => {
   clearBuyerAgentExecutionForTests();
 });
 
-test("model-directed buyer loop reaches approval with one tool per turn", async () => {
+test("model-directed buyer loop reaches approval with explicit product selection", async () => {
   const restore = mockFetch();
   try {
     const sequence = [
@@ -69,6 +69,7 @@ test("model-directed buyer loop reaches approval with one tool per turn", async 
       "search_products",
       "inspect_product",
       "check_inventory",
+      "select_product",
       "build_basket",
       "prepare_approval",
     ] as const;
@@ -82,9 +83,11 @@ test("model-directed buyer loop reaches approval with one tool per turn", async 
           ? { query: "ANC headphones", category: "headphones", maxPricePaise: 700000, inStockOnly: true }
           : tool === "inspect_product" || tool === "check_inventory"
             ? { productId: "hp-002" }
-            : tool === "build_basket"
-              ? { lineItems: [{ productId: "hp-002", quantity: 1 }] }
-              : {},
+            : tool === "select_product"
+              ? { productId: "hp-002", reason: "Best observed combination of battery life, rating and price for the stated goal." }
+              : tool === "build_basket"
+                ? { lineItems: [{ productId: "hp-002", quantity: 1 }] }
+                : {},
         callId: `call-${index}`,
         model: "test-planner",
         outputItems: [{ type: "function_call", name: tool, call_id: `call-${index}`, arguments: "{}" }],
@@ -93,10 +96,12 @@ test("model-directed buyer loop reaches approval with one tool per turn", async 
 
     const execution = await runBuyerAgent({ objective: "Find the best ANC headphones under ₹7,000", maxSpendPaise: 700000, planner, merchantInternalUrl: "http://merchant.test" });
     assert.equal(execution.run.state, "WAITING_FOR_APPROVAL");
-    assert.equal(execution.trace.length, 7);
+    assert.equal(execution.trace.length, 8);
     assert.deepEqual(execution.trace.map((step) => step.tool), sequence);
+    assert.equal(execution.workspace.selectedProductId, "hp-002");
     assert.equal(execution.workspace.latestQuote?.totalPaise, 579900);
     assert.equal(execution.workspace.basket[0]?.productId, "hp-002");
+    assert.match(String(execution.trace.find((step) => step.tool === "select_product")?.output), /SELECTED/);
   } finally {
     restore();
   }
@@ -105,7 +110,7 @@ test("model-directed buyer loop reaches approval with one tool per turn", async 
 test("a tool failure is returned to the planner and the agent can recover", async () => {
   const restore = mockFetch();
   try {
-    const sequence = ["search_products", "read_catalog", "search_products", "inspect_product", "check_inventory", "build_basket", "prepare_approval"] as const;
+    const sequence = ["search_products", "read_catalog", "search_products", "inspect_product", "check_inventory", "select_product", "build_basket", "prepare_approval"] as const;
     let index = 0;
     const planner: BuyerAgentPlanner = async () => {
       const tool = sequence[index++];
@@ -116,9 +121,11 @@ test("a tool failure is returned to the planner and the agent can recover", asyn
           ? { query: "ANC headphones", category: "headphones", maxPricePaise: 700000, inStockOnly: true }
           : tool === "inspect_product" || tool === "check_inventory"
             ? { productId: "hp-001" }
-            : tool === "build_basket"
-              ? { lineItems: [{ productId: "hp-001", quantity: 1 }] }
-              : {},
+            : tool === "select_product"
+              ? { productId: "hp-001", reason: "Only after confirming it is available." }
+              : tool === "build_basket"
+                ? { lineItems: [{ productId: "hp-001", quantity: 1 }] }
+                : {},
         callId: `recovery-${index}`,
         model: "test-planner",
         outputItems: [{ type: "function_call", name: tool, call_id: `recovery-${index}`, arguments: "{}" }],
