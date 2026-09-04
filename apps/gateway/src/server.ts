@@ -290,7 +290,9 @@ app.post("/v1/mandates/:authorizationId/razorpay-order", async (request, respons
   try {
     const authorizationId = request.params.authorizationId?.trim();
     const transactionId = typeof request.body?.transactionId === "string" ? request.body.transactionId.trim() : "";
+    const campaignId = typeof request.body?.campaignId === "string" ? request.body.campaignId.trim() : "";
     if (!authorizationId || !transactionId) return response.status(400).json({ error: "MANDATE_PAYMENT_BINDING_REQUIRED" });
+    if (campaignId && !/^[a-z0-9][a-z0-9-]{0,39}$/.test(campaignId)) return response.status(400).json({ error: "INVALID_GROWTH_CAMPAIGN_ID" });
     const transaction = getTransaction(transactionId);
     if (!transaction) return response.status(404).json({ error: "TRANSACTION_NOT_FOUND" });
     const authorization = transaction.mandateAuthorization;
@@ -305,7 +307,7 @@ app.post("/v1/mandates/:authorizationId/razorpay-order", async (request, respons
     if (expectedCartHash !== authorization.cartHash) return response.status(409).json({ error: "MANDATE_BINDING_MISMATCH" });
     if (transaction.razorpayOrderId) return response.json({ transaction, razorpayOrderId: transaction.razorpayOrderId, checkout: getPublicConfig(), mandateAuthorizationId: authorization.authorizationId, alreadyCreated: true });
     if (transaction.state !== "policy_authorized") return response.status(409).json({ error: "TRANSACTION_NOT_AUTHORIZED", state: transaction.state });
-    const order = await createOrder(transaction);
+    const order = await createOrder(transaction, campaignId ? { campaignId } : {});
     const updated = attachRazorpayOrder(transaction.id, order.id);
     return response.status(201).json({ transaction: updated, order, checkout: getPublicConfig(), mandateAuthorizationId: authorization.authorizationId });
   } catch (error) { const message = error instanceof Error ? error.message : "MANDATE_PAYMENT_BRIDGE_FAILED"; return response.status(message.includes("NOT_CONFIGURED") ? 503 : 422).json({ error: message }); }
