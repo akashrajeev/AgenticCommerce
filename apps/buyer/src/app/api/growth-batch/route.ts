@@ -4,6 +4,19 @@ const GATEWAY_INTERNAL_URL = (process.env.GATEWAY_INTERNAL_URL ?? "http://localh
 const MCP_INTERNAL_URL = (process.env.MCP_INTERNAL_URL ?? "http://localhost:4100").replace(/\/$/, "");
 const MCP_AGENT_TOKEN = process.env.MCP_AGENT_TOKEN ?? "";
 
+type McpCreateOrderBody = {
+  error?: { message?: unknown };
+  result?: {
+    isError?: boolean;
+    structuredContent?: {
+      transaction?: unknown;
+      order?: unknown;
+      checkout?: unknown;
+    };
+    content?: Array<{ text?: unknown }>;
+  };
+};
+
 async function gatewayJson(path: string): Promise<Record<string, unknown> | null> {
   const response = await fetch(`${GATEWAY_INTERNAL_URL}${path}`, { cache: "no-store", signal: AbortSignal.timeout(8000) });
   return await response.json().catch(() => null) as Record<string, unknown> | null;
@@ -30,8 +43,22 @@ async function callMcpCreateOrder(authorizationId: string, transactionId: string
       cache: "no-store",
       signal: AbortSignal.timeout(12000),
     });
-    const body = await response.json().catch(() => null) as Record<string, unknown> | null;
-    return { ok: response.ok, body } as const;
+    const body = await response.json().catch(() => null) as McpCreateOrderBody | null;
+    const errorMessage = typeof body?.error?.message === "string"
+      ? body.error.message
+      : typeof body?.result?.content?.[0]?.text === "string"
+        ? String(body.result.content[0].text)
+        : "MCP_CREATE_ORDER_FAILED";
+    const structured = body?.result?.structuredContent;
+    const ok = response.ok && body?.result?.isError !== true && Boolean(structured?.order);
+    return {
+      ok,
+      body,
+      ...(structured?.transaction !== undefined ? { transaction: structured.transaction } : {}),
+      ...(structured?.order !== undefined ? { order: structured.order } : {}),
+      ...(structured?.checkout !== undefined ? { checkout: structured.checkout } : {}),
+      ...(ok ? {} : { error: errorMessage }),
+    } as const;
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "MCP_UNAVAILABLE" } as const;
   }
