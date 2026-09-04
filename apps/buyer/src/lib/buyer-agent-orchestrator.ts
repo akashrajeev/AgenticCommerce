@@ -1,0 +1,340 @@
+import type { BuyerAgentRun } from "./buyer-agent";
+import {
+  assertBuyerBudget,
+  createBuyerAgentRun,
+  failBuyerAgent,
+  recordBuyerAgentStep,
+  transitionBuyerAgent,
+} from "./buyer-agent";
+import {
+  BUYER_AGENT_TOOLS,
+  BUYER_AGENT_TOOL_NAMES,
+  createBuyerAgentWorkspace,
+  executeBuyerAgentTool,
+  type BuyerAgentToolName,
+  type BuyerAgentWorkspace,
+} from "./buyer-agent-tools";
+
+export type BuyerAgentPlanner = (input: {
+  run: BuyerAgentRun;
+  workspace: BuyerAgentWorkspace;
+  availableTools: readonly BuyerAgentToolName[];
+  history: readonly unknown[];
+}) => Promise<{
+  tool: BuyerAgentToolName;
+  arguments: Record<string, unknown>;
+  callId: string;
+  model: string;
+  outputItems: unknown[];
+}>;
+
+export type BuyerAgentTraceStep = {
+  step: number;
+  state: BuyerAgentRun["state"];
+  tool: BuyerAgentToolName;
+  arguments: Record<string, unknown>;
+  status: "started" | "succeeded" | "failed";
+  reason?: string;
+  output?: unknown;
+  error?: string;
+  callId?: string;
+  plannerModel?: string;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+};
+
+export type BuyerAgentExecution = {
+  run: BuyerAgentRun;
+  workspace: BuyerAgentWorkspace;
+  trace: BuyerAgentTraceStep[];
+  plannerCalls: number;
+  plannerModel?: string;
+};
+
+const DEFAULT_MODEL = process.env.OPENAI_MODEL?.trim() || "gpt-5.6";
+const MAX_HISTORY_ITEMS = 32;
+const histories = new Map<string, unknown[]>();
+const traces = new Map<string, BuyerAgentTraceStep[]>();
+
+function now(): string {
+  return new Date().toISOString();
+}
+
+function extractFunctionCall(body: Record<string, unknown> | null): { name: string; arguments: string; callId: string; outputItems: unknown[] } {
+  const output = Array.isArray(body?.output) ? body.output : [];
+  const calls = output
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .filter((item) => item.type === "function_call")
+    .map((item) => ({
+      name: typeof item.name === "string" ? item.name : "",
+      arguments: typeof item.arguments === "string" ? item.arguments : "{}",
+      callId: typeof item.call_id === "string" ? item.call_id : "",
+    }));
+
+  if (calls.length === 0) throw new Error("BUYER_AGENT_NO_TOOL_CALL");
+  if (calls.length !== 1) throw new Error("BUYER_AGENT_MULTIPLE_TOOL_CALLS");
+  const call = calls[0];
+  if (!call) throw new Error("BUYER_AGENT_NO_TOOL_CALL");
+  return { ...call, outputItems: output };
+}
+
+function assertAllowedTool(name: string): asserts name is BuyerAgentToolName {
+  if (!(BUYER_AGENT_TOOL_NAMES as readonly string[]).includes(name)) {
+    throw new Error("BUYER_AGENT_TOOL_NOT_ALLOWED");
+  }
+}
+
+function parseArguments(value: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("BUYER_AGENT_TOOL_ARGUMENTS_INVALID");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("BUYER_AGENT_TOOL_ARGUMENTS_INVALID");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function addHistory(runId: string, outputItems: unknown[], toolOutput: unknown): void {
+  const history = histories.get(runId) ?? [];
+  history.push(...outputItems, toolOutput);
+  histories.set(runId, history.slice(-MAX_HISTORY_ITEMS));
+}
+
+function getHistory(runId: string): unknown[] {
+  return [...(histories.get(runId) ?? [])];
+}
+
+function traceFor(runId: string): BuyerAgentTraceStep[] {
+  const existing = traces.get(runId);
+  if (existing) return existing;
+  const created: BuyerAgentTraceStep[] = [];
+  traces.set(runId, created);
+  return created;
+}
+
+function describeTool(name: BuyerAgentToolName): string {
+  switch (name) {
+    case "discover_merchant": return "Discover the merchant's machine-readable commerce contract.";
+    case "read_catalog": return "Load the live machine-readable product catalog.";
+    case "search_products": return "Narrow candidates against the buyer's immutable constraints.";
+    case "inspect_product": return "Inspect a candidate before relying on it.";
+    case "check_inventory": return "Verify current availability before basket construction.";
+    case "get_quote": return "Refresh the current merchant price for the proposed basket.";
+    case "compare_products": return "Compare observed candidates on normalized product facts.";
+    case "get_merchant_recommendations": return "Evaluate merchant-published upsell/cross-sell options.";
+    case "build_basket": return "Construct a buyer-proposed basket and obtain a quote.";
+    case "validate_budget": return "Deterministically verify the basket total against the hard limit.";
+    case "prepare_approval": return "Freeze a review-ready proposal without authorizing payment.";
+  }
+}
+
+export function clearBuyerAgentExecutionForTests(): void {
+  histories.clear();
+  traces.clear();
+}
+
+export function getBuyerAgentTrace(runId: string): BuyerAgentTraceStep[] {
+  return [...traceFor(runId)];
+}
+
+export function getBuyerAgentHistory(runId: string): unknown[] {
+  return getHistory(runId);
+}
+
+export async function runBuyerAgent(options: {
+  objective: string;
+  maxSpendPaise: number;
+  maxSteps?: number;
+  requiredCategory?: string;
+  requiredProductIds?: readonly string[];
+  merchantInternalUrl?: string;
+  planner?: BuyerAgentPlanner;
+}): Promise<BuyerAgentExecution> {
+  const run = createBuyerAgentRun(options);
+  const workspace = createBuyerAgentWorkspace();
+  const trace = traceFor(run.id);
+  const planner = options.planner ?? defaultBuyerAgentPlanner;
+  let plannerCalls = 0;
+  let plannerModel: string | undefined;
+
+  transitionBuyerAgent(run.id, "PLANNING");
+
+  try {
+    while (run.state !== "WAITING_FOR_APPROVAL" && run.state !== "COMPLETED" && run.state !== "FAILED") {
+      recordBuyerAgentStep(run.id);
+      const stepNumber = run.stepCount;
+      const startedAt = now();
+
+      let plan: Awaited<ReturnType<BuyerAgentPlanner>>;
+      try {
+        plan = await planner({
+          run,
+          workspace,
+          availableTools: BUYER_AGENT_TOOL_NAMES,
+          history: getHistory(run.id),
+        });
+        plannerCalls += 1;
+        plannerModel = plan.model;
+        assertAllowedTool(plan.tool);
+      } catch (error) {
+        const step: BuyerAgentTraceStep = {
+          step: stepNumber,
+          state: run.state,
+          tool: "prepare_approval",
+          arguments: {},
+          status: "failed",
+          error: error instanceof Error ? error.message : "BUYER_AGENT_PLANNER_FAILED",
+          startedAt,
+          completedAt: now(),
+        };
+        trace.push(step);
+        failBuyerAgent(run.id, step.error ?? "BUYER_AGENT_PLANNER_FAILED");
+        break;
+      }
+
+      const traceStep: BuyerAgentTraceStep = {
+        step: stepNumber,
+        state: run.state,
+        tool: plan.tool,
+        arguments: plan.arguments,
+        status: "started",
+        reason: describeTool(plan.tool),
+        callId: plan.callId,
+        plannerModel: plan.model,
+        startedAt,
+      };
+      trace.push(traceStep);
+
+      try {
+        const result = await executeBuyerAgentTool(
+          { run, workspace, merchantInternalUrl: options.merchantInternalUrl },
+          plan.tool,
+          plan.arguments,
+        );
+
+        traceStep.status = "succeeded";
+        traceStep.output = result.result;
+        traceStep.completedAt = now();
+        traceStep.durationMs = Math.max(Date.parse(traceStep.completedAt) - Date.parse(startedAt), 0);
+        addHistory(run.id, plan.outputItems, {
+          type: "function_call_output",
+          call_id: plan.callId,
+          output: JSON.stringify(result.result),
+        });
+
+        if (plan.tool === "discover_merchant" || plan.tool === "read_catalog") {
+          transitionIfPossible(run, "OBSERVING");
+        } else if (plan.tool === "search_products") {
+          transitionIfPossible(run, "SEARCHING");
+        } else if (plan.tool === "compare_products") {
+          transitionIfPossible(run, "COMPARING");
+        } else if (plan.tool === "build_basket") {
+          transitionIfPossible(run, "BUILDING_BASKET");
+        } else if (plan.tool === "prepare_approval") {
+          assertBuyerBudget(run, workspace.latestQuote?.totalPaise ?? -1);
+          transitionIfPossible(run, "WAITING_FOR_APPROVAL");
+          break;
+        }
+      } catch (error) {
+        traceStep.status = "failed";
+        traceStep.error = error instanceof Error ? error.message : "BUYER_AGENT_TOOL_FAILED";
+        traceStep.completedAt = now();
+        traceStep.durationMs = Math.max(Date.parse(traceStep.completedAt) - Date.parse(startedAt), 0);
+        addHistory(run.id, plan.outputItems, {
+          type: "function_call_output",
+          call_id: plan.callId,
+          output: JSON.stringify({ error: traceStep.error }),
+        });
+      }
+    }
+  } catch (error) {
+    failBuyerAgent(run.id, error instanceof Error ? error.message : "BUYER_AGENT_FAILED");
+  }
+
+  return { run, workspace, trace: [...trace], plannerCalls, plannerModel };
+}
+
+function transitionIfPossible(run: BuyerAgentRun, state: BuyerAgentRun["state"]): void {
+  if (run.state === state) return;
+  try {
+    transitionBuyerAgent(run.id, state);
+  } catch {
+    if (state !== "PLANNING") throw new Error(`BUYER_AGENT_INVALID_TRANSITION:${run.state}->${state}`);
+  }
+}
+
+async function defaultBuyerAgentPlanner(input: Parameters<BuyerAgentPlanner>[0]): Promise<Awaited<ReturnType<BuyerAgentPlanner>>> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("BUYER_AGENT_AI_NOT_CONFIGURED");
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: DEFAULT_MODEL,
+      store: false,
+      parallel_tool_calls: false,
+      tool_choice: "auto",
+      instructions: [
+        "You are the buyer agent inside MANDATE.",
+        "Your job is to achieve the user's shopping objective using only the provided bounded buyer tools.",
+        "Choose exactly one tool per turn.",
+        "Prefer observation before selection: discover the merchant, read the catalog, search, inspect and verify inventory before constructing a basket.",
+        "Use fresh quotes before finalizing a basket.",
+        "Evaluate merchant recommendations against the user's stated goal; accept only useful additions within the immutable spending limit.",
+        "If a tool fails or a candidate becomes unavailable, replan from observed facts instead of inventing results.",
+        "The hard spending limit is immutable and supplied by the application.",
+        "Never authorize, create, capture, refund or claim a payment occurred.",
+        "Approval is prepared only by prepare_approval and still requires explicit user approval outside this loop.",
+        "Return concise decision reasons; never output hidden chain-of-thought.",
+      ].join(" "),
+      input: [
+        {
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: JSON.stringify({
+              objective: input.run.objective,
+              constraints: input.run.constraints,
+              state: input.run.state,
+              workspace: {
+                merchantDiscovered: Boolean(input.workspace.manifest),
+                catalogLoaded: Boolean(input.workspace.catalog),
+                selectedProductId: input.workspace.selectedProductId,
+                basket: input.workspace.basket,
+                latestQuote: input.workspace.latestQuote,
+                recommendationCount: input.workspace.recommendations.length,
+                inspectedProductIds: Object.keys(input.workspace.inspectedProducts),
+                inventory: input.workspace.inventory,
+              },
+            }),
+          }],
+        },
+        ...input.history,
+      ],
+      tools: BUYER_AGENT_TOOLS,
+    }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
+  });
+
+  const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) throw new Error(`BUYER_AGENT_AI_HTTP_${response.status}`);
+  const call = extractFunctionCall(body);
+  assertAllowedTool(call.name);
+  const args = parseArguments(call.arguments);
+  return {
+    tool: call.name,
+    arguments: args,
+    callId: call.callId,
+    model: DEFAULT_MODEL,
+    outputItems: call.outputItems,
+  };
+}
