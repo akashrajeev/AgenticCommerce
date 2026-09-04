@@ -68,7 +68,7 @@ test("supports stateless 2026 discover and tool listing", async () => {
   assert.equal(listed.status, 200);
   const body = await listed.json() as { result?: { tools?: Array<{ name?: string }>; ttlMs?: number; cacheScope?: string } };
   const names = body.result?.tools?.map((tool) => tool.name) ?? [];
-  assert.deepEqual(names, ["mandate_razorpay_create_order", "mandate_razorpay_fetch_order", "mandate_razorpay_fetch_payment", "mandate_razorpay_capture_payment", "mandate_razorpay_verify_settlement"]);
+  assert.deepEqual(names, ["mandate_razorpay_create_order", "mandate_razorpay_fetch_order", "mandate_razorpay_fetch_payment", "mandate_razorpay_capture_payment", "mandate_razorpay_verify_settlement", "mandate_razorpay_explain_transaction"]);
   assert.equal(body.result?.ttlMs, 60_000);
   assert.equal(body.result?.cacheScope, "private");
 });
@@ -96,13 +96,25 @@ test("rejects a payment tool call without its mandate authorization fields", asy
   assert.equal(body.result?.content?.[0]?.text, "INVALID_AUTHORIZATIONID");
 });
 
+test("requires a transaction ID for the read-only explanation tool", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    method: "POST",
+    headers: { ...modernHeaders, "mcp-method": "tools/call", "mcp-name": "mandate_razorpay_explain_transaction" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "mandate_razorpay_explain_transaction", arguments: {} } }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+  assert.equal(body.result?.isError, true);
+  assert.equal(body.result?.content?.[0]?.text, "INVALID_TRANSACTIONID");
+});
+
 test("retains legacy 2025 initialize compatibility", async () => {
   const headers = { ...modernHeaders, "mcp-protocol-version": "2025-11-25" };
   delete (headers as Record<string, string>)["mcp-method"];
   const initialize = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ jsonrpc: "2.0", id: 6, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "legacy", version: "1.0" } } }),
+    body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "legacy", version: "1.0" } } }),
   });
   assert.equal(initialize.status, 200);
   const body = await initialize.json() as { result?: { protocolVersion?: string } };
