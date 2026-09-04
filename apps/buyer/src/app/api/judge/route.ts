@@ -96,6 +96,6 @@ export async function GET() {
       protocolCount: protocolMatrix.ok && protocolMatrix.body && typeof protocolMatrix.body === "object" ? ((protocolMatrix.body as Record<string, unknown>).summary as Record<string, unknown> | undefined)?.total ?? 0 : 0,
       growthUpliftPaise,
     },
-    links: { negotiation: "/negotiation", growth: "/growth", growthBatch: "/growth-batch", campaigns: `${merchant}/campaign-orchestrator`, mcp: "/mcp/authorized", x402: "/x402", protocols: "/protocols", proof: "/proof" },
+    links: { negotiation: "/negotiation", growth: "/growth", growthBatch: "/growth-batch", campaigns: `${merchant}/campaign-orchestrator`, campaignAttribution: `${merchant}/campaigns/attribution`, mcp: "/mcp/authorized", x402: "/x402", protocols: "/protocols", proof: "/proof" },
   });
 }
