@@ -180,17 +180,22 @@ export default function GrowthPage() {
       if (!firstLine) throw new Error("Growth basket is empty.");
       const quoteResponse = await fetch(`${merchant}/api/agent/checkout/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lineItems }) });
       const quoteBody = await quoteResponse.json();
-      if (!quoteResponse.ok) throw new Error(quoteBody.error ?? "Bundle quote failed.");
+      if (!quoteResponse.ok || !quoteBody.quote) throw new Error(quoteBody.error ?? "Bundle quote failed.");
       const quote = quoteBody.quote;
-      const response = await fetch(`${gateway}/v1/purchase-intents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ merchantId: "mandate-market", productId: firstLine.productId, quantity: 1, lineItems, maxSpendPaise: Math.round(Number(budget) * 100), reason: agentOfferReady ? `Approved Growth Agent offer ${agentRun?.id}` : `Approved growth opportunity ${selected.opportunityId}`, quoteId: quote.quoteId }) });
-      const body = await response.json();
-      if (!response.ok || !body.transaction) throw new Error(body.error ?? "Gateway rejected the growth basket.");
-      const nextTransaction = body.transaction as Transaction;
+      const mandateResponse = await fetch("/api/growth-approval", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ quote, maxSpendPaise: Math.round(Number(budget) * 100), reason: agentOfferReady ? `Approved Growth Agent offer ${agentRun?.id}` : `Approved growth opportunity ${selected.opportunityId}` }),
+        cache: "no-store",
+      });
+      const body = await mandateResponse.json();
+      if (!mandateResponse.ok || !body.transaction) throw new Error(body.error ?? "MANDATE rejected the growth basket.");
+      const nextTransaction = body.transaction as Transaction & { state: string };
       setTransaction(nextTransaction);
       if (nextTransaction.state === "policy_authorized") {
         await createTestModeOrder(nextTransaction.id);
       } else {
-        setMessage("The gateway blocked the approved basket before payment.");
+        setMessage("MANDATE blocked the approved basket before payment.");
       }
     } catch (error) { setMessage(error instanceof Error ? error.message : "Growth approval failed."); }
     finally { setBusy(false); }
@@ -205,7 +210,7 @@ export default function GrowthPage() {
           <section className={styles.left}>
             <span className={styles.kicker}>PHASE 7 / AI GROWTH</span>
             <h1>Grow the basket without bypassing the gate.</h1>
-            <p className={styles.lede}>The merchant exposes a measurable opportunity. The Growth Agent prepares a quote-backed offer. The buyer approves it explicitly. MANDATE then revalidates the basket before a real Razorpay Test Mode order is created.</p>
+            <p className={styles.lede}>The merchant exposes a measurable opportunity. The Growth Agent prepares a quote-backed offer. The buyer approves it explicitly. MANDATE verifies a signed human-present mandate, revalidates the basket, and only then allows a real Razorpay Test Mode order.</p>
             <div className={styles.flow}><span>RECOMMEND</span><b>→</b><span>AGENT</span><b>→</b><span>APPROVE</span><b>→</b><span>MANDATE</span><b>→</b><span>TEST MODE</span></div>
             <label className={styles.label}>Source product<input value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="e.g. hp-001" /></label>
             <label className={styles.label}>Customer budget<input value={budget} onChange={(event) => setBudget(event.target.value)} inputMode="decimal" /></label>
@@ -222,7 +227,7 @@ export default function GrowthPage() {
               {agentRun && <div className={styles.source}><div><span>GROWTH AGENT</span><strong>{agentRun.state}</strong><small>{agentRun.plannerModel ?? "planner"} · {agentRun.plannerCalls} planner call(s) · {agentRun.id}</small></div>{agentRun.preparedOffer && <b>{money(agentRun.preparedOffer.bundleAmountPaise)}</b>}</div>}
               {agentRun && <div className={styles.opportunities}>{agentRun.trace.map((step) => <div key={`${agentRun.id}:${step.step}`} className={styles.source}><div><span>STEP {step.step}</span><strong>{step.tool}</strong><small>{step.status}{step.durationMs !== undefined ? ` · ${step.durationMs} ms` : ""}{step.error ? ` · ${step.error}` : ""}</small></div></div>)}</div>}
 
-              {selected && <div className={styles.approval}><div><span className={styles.panelKicker}>{agentOfferReady ? "AGENT OFFER / APPROVAL" : "APPROVAL"}</span><h3>{agentOfferReady ? "Review the Growth Agent offer" : selected.type === "UPSELL" ? "Upgrade the product" : "Add a complementary item"}</h3><p>{agentOfferReady ? "The agent prepared this offer, but it cannot authorize payment. Approval creates a fresh checkout quote, enters MANDATE, and then can create a real attributable Test Mode order." : selected.rationale}</p></div><div className={styles.approvalMeta}><span>Incremental value<strong>{money(agentRun?.preparedOffer?.incrementalRevenuePaise ?? selected.incrementalRevenue.amountPaise)}</strong></span><span>Projected basket<strong>{money(agentRun?.preparedOffer?.bundleAmountPaise ?? selected.projectedBasket.amountPaise)}</strong></span></div><button className={styles.approve} disabled={busy || !selected.budgetFit || (Boolean(agentRun) && !agentOfferReady)} onClick={() => void approve()}>{agentRun && !agentOfferReady ? "Agent offer not ready" : selected.budgetFit ? "Approve & route through MANDATE" : "Outside customer budget"}<span>→</span></button></div>}
+              {selected && <div className={styles.approval}><div><span className={styles.panelKicker}>{agentOfferReady ? "AGENT OFFER / APPROVAL" : "APPROVAL"}</span><h3>{agentOfferReady ? "Review the Growth Agent offer" : selected.type === "UPSELL" ? "Upgrade the product" : "Add a complementary item"}</h3><p>{agentOfferReady ? "The agent prepared this offer, but it cannot authorize payment. Your approval creates a fresh quote, signs a human-present mandate at the buyer boundary, enters MANDATE, and then can create a real attributable Test Mode order." : selected.rationale}</p></div><div className={styles.approvalMeta}><span>Incremental value<strong>{money(agentRun?.preparedOffer?.incrementalRevenuePaise ?? selected.incrementalRevenue.amountPaise)}</strong></span><span>Projected basket<strong>{money(agentRun?.preparedOffer?.bundleAmountPaise ?? selected.projectedBasket.amountPaise)}</strong></span></div><button className={styles.approve} disabled={busy || !selected.budgetFit || (Boolean(agentRun) && !agentOfferReady)} onClick={() => void approve()}>{agentRun && !agentOfferReady ? "Agent offer not ready" : selected.budgetFit ? "Approve & route through MANDATE" : "Outside customer budget"}<span>→</span></button></div>}
 
               {transaction && <div className={`${styles.transaction} ${transaction.state === "policy_authorized" ? styles.allowed : styles.blocked}`}><div><span>MANDATE DECISION</span><strong>{transaction.state === "policy_authorized" ? "ALLOWED" : "BLOCKED"}</strong><small>{transaction.id}</small></div><b>{money(transaction.quote.totalPaise)}</b></div>}
               {cohortOrder && <div className={styles.transaction}><div><span>TEST MODE COHORT</span><strong>{cohortReady ? "ORDER CREATED" : "BLOCKED"}</strong><small>{cohortOrder.order?.id ?? cohortOrder.error ?? "No Razorpay order"}</small></div>{cohortReady ? <button className={styles.approve} disabled={paymentStatus === "CHECKOUT_OPEN" || paymentStatus === "ORDER_CONFIRMED"} onClick={() => openRazorpay()}>{paymentStatus === "ORDER_CONFIRMED" ? "Payment confirmed" : paymentStatus ? paymentStatus.replaceAll("_", " ") : "Pay in Razorpay Test Mode →"}</button> : <b>NO ORDER</b>}</div>}
