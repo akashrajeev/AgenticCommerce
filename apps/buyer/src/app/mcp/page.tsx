@@ -94,7 +94,7 @@ export default function McpLabPage() {
         <section style={{ marginTop: 20, background: "white", border: "1px solid #ddd", borderRadius: 18, padding: 24 }}>
           <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#666" }}>TRUST MODEL</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 16 }}>
-            [["Agent", "Requests / proposals"], ["MCP facade", "Authentication + tool boundary"], ["MANDATE", "Authorization + deterministic policy"], ["Razorpay", "Payment rail"]].map(([label, detail]) => <div key={label} style={{ padding: 16, border: "1px solid #e3e3e3", borderRadius: 14 }}><strong>{label}</strong><div style={{ marginTop: 6, color: "#666", fontSize: 14 }}>{detail}</div></div>)
+            {[['Agent', 'Requests / proposals'], ['MCP facade', 'Authentication + tool boundary'], ['MANDATE', 'Authorization + deterministic policy'], ['Razorpay', 'Payment rail']].map(([label, detail]) => <div key={label} style={{ padding: 16, border: "1px solid #e3e3e3", borderRadius: 14 }}><strong>{label}</strong><div style={{ marginTop: 6, color: "#666", fontSize: 14 }}>{detail}</div></div>)}
           </div>
         </section>
       </div>
