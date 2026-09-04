@@ -9,3 +9,4 @@ export function createHealthStatus(app: AppName): HealthStatus {
 }
 
 export * from "./protocol-registry.js";
+export * from "./intent-planner.js";
