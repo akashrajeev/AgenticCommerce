@@ -3,6 +3,7 @@ import {
   assertBuyerBudget,
   createBuyerAgentRun,
   failBuyerAgent,
+  getBuyerAgentRun,
   recordBuyerAgentStep,
   transitionBuyerAgent,
 } from "./buyer-agent";
@@ -22,6 +23,7 @@ import {
   BUYER_AGENT_SELECTION_TOOL_NAME,
   executeBuyerAgentSelectionTool,
 } from "./buyer-agent-selection";
+import { loadBuyerAgentRunClient, persistBuyerAgentCheckpointClient } from "./buyer-agent-persistence-client";
 import {
   BUYER_AGENT_TOOLS,
   BUYER_AGENT_TOOL_NAMES,
@@ -82,10 +84,7 @@ const BASE_BUYER_AGENT_MODEL_TOOLS = BUYER_AGENT_TOOLS.map((tool) => {
   if (tool.name !== "search_products") return tool;
   return {
     ...tool,
-    parameters: {
-      ...tool.parameters,
-      required: ["query", "category", "maxPricePaise", "inStockOnly"],
-    },
+    parameters: { ...tool.parameters, required: ["query", "category", "maxPricePaise", "inStockOnly"] },
   };
 });
 
@@ -117,7 +116,6 @@ function extractFunctionCall(body: Record<string, unknown> | null): { name: stri
       arguments: typeof item.arguments === "string" ? item.arguments : "{}",
       callId: typeof item.call_id === "string" ? item.call_id : "",
     }));
-
   if (calls.length === 0) throw new Error("BUYER_AGENT_NO_TOOL_CALL");
   if (calls.length !== 1) throw new Error("BUYER_AGENT_MULTIPLE_TOOL_CALLS");
   const call = calls[0];
@@ -126,21 +124,13 @@ function extractFunctionCall(body: Record<string, unknown> | null): { name: stri
 }
 
 function assertAllowedTool(name: string): asserts name is BuyerPlanningToolName {
-  if (!(ALL_BUYER_PLANNING_TOOLS as readonly string[]).includes(name)) {
-    throw new Error("BUYER_AGENT_TOOL_NOT_ALLOWED");
-  }
+  if (!(ALL_BUYER_PLANNING_TOOLS as readonly string[]).includes(name)) throw new Error("BUYER_AGENT_TOOL_NOT_ALLOWED");
 }
 
 function parseArguments(value: string): Record<string, unknown> {
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("BUYER_AGENT_TOOL_ARGUMENTS_INVALID");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("BUYER_AGENT_TOOL_ARGUMENTS_INVALID");
-  }
+  try { parsed = JSON.parse(value); } catch { throw new Error("BUYER_AGENT_TOOL_ARGUMENTS_INVALID"); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("BUYER_AGENT_TOOL_ARGUMENTS_INVALID");
   return parsed as Record<string, unknown>;
 }
 
@@ -181,6 +171,18 @@ function describeTool(name: BuyerPlanningToolName): string {
   }
 }
 
+async function persistCheckpoint(
+  run: BuyerAgentRun,
+  workspace: BuyerAgentWorkspace,
+  plannerCalls: number,
+  plannerModel: string | undefined,
+  step: BuyerAgentTraceStep | undefined,
+  enabled: boolean,
+): Promise<void> {
+  if (!enabled) return;
+  await persistBuyerAgentCheckpointClient({ run, workspace, plannerCalls, plannerModel, step });
+}
+
 export function clearBuyerAgentExecutionForTests(): void {
   histories.clear();
   traces.clear();
@@ -194,6 +196,10 @@ export function getBuyerAgentHistory(runId: string): unknown[] {
   return getHistory(runId);
 }
 
+export async function loadPersistedBuyerAgentRun(runId: string): Promise<unknown> {
+  return loadBuyerAgentRunClient(runId);
+}
+
 export async function runBuyerAgent(options: {
   objective: string;
   maxSpendPaise: number;
@@ -202,17 +208,20 @@ export async function runBuyerAgent(options: {
   requiredProductIds?: readonly string[];
   merchantInternalUrl?: string;
   planner?: BuyerAgentPlanner;
+  persist?: boolean;
 }): Promise<BuyerAgentExecution> {
   const run = createBuyerAgentRun(options);
   const workspace = createBuyerAgentWorkspace();
   const trace = traceFor(run.id);
   const planner = options.planner ?? defaultBuyerAgentPlanner;
+  const persistenceEnabled = options.persist ?? true;
   let plannerCalls = 0;
   let plannerModel: string | undefined;
 
   transitionBuyerAgent(run.id, "PLANNING");
 
   try {
+    await persistCheckpoint(run, workspace, plannerCalls, plannerModel, undefined, persistenceEnabled);
     while (run.state !== "WAITING_FOR_APPROVAL" && run.state !== "COMPLETED" && run.state !== "FAILED") {
       recordBuyerAgentStep(run.id);
       const stepNumber = run.stepCount;
@@ -220,19 +229,16 @@ export async function runBuyerAgent(options: {
 
       let plan: Awaited<ReturnType<BuyerAgentPlanner>>;
       try {
-        plan = await planner({
-          run,
-          workspace,
-          availableTools: ALL_BUYER_PLANNING_TOOLS,
-          history: getHistory(run.id),
-        });
+        plan = await planner({ run, workspace, availableTools: ALL_BUYER_PLANNING_TOOLS, history: getHistory(run.id) });
         plannerCalls += 1;
         plannerModel = plan.model;
         assertAllowedTool(plan.tool);
       } catch (error) {
         const message = error instanceof Error ? error.message : "BUYER_AGENT_PLANNER_FAILED";
-        trace.push({ step: stepNumber, state: run.state, tool: "prepare_approval", arguments: {}, status: "failed", error: message, startedAt, completedAt: now() });
+        const failedStep: BuyerAgentTraceStep = { step: stepNumber, state: run.state, tool: "prepare_approval", arguments: {}, status: "failed", error: message, startedAt, completedAt: now() };
+        trace.push(failedStep);
         failBuyerAgent(run.id, message);
+        await persistCheckpoint(run, workspace, plannerCalls, plannerModel, failedStep, persistenceEnabled).catch(() => undefined);
         break;
       }
 
@@ -248,8 +254,8 @@ export async function runBuyerAgent(options: {
         startedAt,
       };
       trace.push(traceStep);
-
       try {
+        await persistCheckpoint(run, workspace, plannerCalls, plannerModel, traceStep, persistenceEnabled);
         const result = plan.tool === BUYER_AGENT_SELECTION_TOOL_NAME
           ? executeBuyerAgentSelectionTool({ run, workspace }, plan.arguments)
           : plan.tool === BUYER_AGENT_OFFER_EVALUATION_TOOL_NAME
@@ -264,29 +270,30 @@ export async function runBuyerAgent(options: {
         traceStep.durationMs = Math.max(Date.parse(traceStep.completedAt) - Date.parse(startedAt), 0);
         addHistory(run.id, plan.outputItems, { type: "function_call_output", call_id: plan.callId, output: JSON.stringify(result.result) });
 
-        if (plan.tool === "discover_merchant" || plan.tool === "read_catalog") {
-          transitionIfPossible(run, "OBSERVING");
-        } else if (plan.tool === "search_products") {
-          transitionIfPossible(run, "SEARCHING");
-        } else if (plan.tool === "compare_products") {
-          transitionIfPossible(run, "COMPARING");
-        } else if (plan.tool === BUYER_AGENT_SELECTION_TOOL_NAME || plan.tool === BUYER_AGENT_BASKET_OPTIMIZER_TOOL_NAME || plan.tool === "build_basket") {
-          transitionIfPossible(run, "BUILDING_BASKET");
-        } else if (plan.tool === "prepare_approval") {
+        if (plan.tool === "discover_merchant" || plan.tool === "read_catalog") transitionIfPossible(run, "OBSERVING");
+        else if (plan.tool === "search_products") transitionIfPossible(run, "SEARCHING");
+        else if (plan.tool === "compare_products") transitionIfPossible(run, "COMPARING");
+        else if (plan.tool === BUYER_AGENT_SELECTION_TOOL_NAME || plan.tool === BUYER_AGENT_BASKET_OPTIMIZER_TOOL_NAME || plan.tool === "build_basket") transitionIfPossible(run, "BUILDING_BASKET");
+        else if (plan.tool === "prepare_approval") {
           assertBuyerBudget(run, workspace.latestQuote?.totalPaise ?? -1);
           transitionIfPossible(run, "WAITING_FOR_APPROVAL");
+          await persistCheckpoint(run, workspace, plannerCalls, plannerModel, traceStep, persistenceEnabled);
           break;
         }
+        await persistCheckpoint(run, workspace, plannerCalls, plannerModel, traceStep, persistenceEnabled);
       } catch (error) {
         traceStep.status = "failed";
         traceStep.error = error instanceof Error ? error.message : "BUYER_AGENT_TOOL_FAILED";
         traceStep.completedAt = now();
         traceStep.durationMs = Math.max(Date.parse(traceStep.completedAt) - Date.parse(startedAt), 0);
         addHistory(run.id, plan.outputItems, { type: "function_call_output", call_id: plan.callId, output: JSON.stringify({ error: traceStep.error }) });
+        await persistCheckpoint(run, workspace, plannerCalls, plannerModel, traceStep, persistenceEnabled).catch(() => undefined);
       }
     }
   } catch (error) {
-    failBuyerAgent(run.id, error instanceof Error ? error.message : "BUYER_AGENT_FAILED");
+    const message = error instanceof Error ? error.message : "BUYER_AGENT_FAILED";
+    failBuyerAgent(run.id, message);
+    await persistCheckpoint(run, workspace, plannerCalls, plannerModel, undefined, persistenceEnabled).catch(() => undefined);
   }
 
   return { run, workspace, trace: [...trace], plannerCalls, plannerModel };
@@ -294,17 +301,13 @@ export async function runBuyerAgent(options: {
 
 function transitionIfPossible(run: BuyerAgentRun, state: BuyerAgentRun["state"]): void {
   if (run.state === state) return;
-  try {
-    transitionBuyerAgent(run.id, state);
-  } catch {
-    if (state !== "PLANNING") throw new Error(`BUYER_AGENT_INVALID_TRANSITION:${run.state}->${state}`);
-  }
+  try { transitionBuyerAgent(run.id, state); }
+  catch { if (state !== "PLANNING") throw new Error(`BUYER_AGENT_INVALID_TRANSITION:${run.state}->${state}`); }
 }
 
 async function defaultBuyerAgentPlanner(input: Parameters<BuyerAgentPlanner>[0]): Promise<Awaited<ReturnType<BuyerAgentPlanner>>> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("BUYER_AGENT_AI_NOT_CONFIGURED");
-
   const observation = buildBuyerAgentObservation(input.run, input.workspace);
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -340,7 +343,6 @@ async function defaultBuyerAgentPlanner(input: Parameters<BuyerAgentPlanner>[0])
     cache: "no-store",
     signal: AbortSignal.timeout(20_000),
   });
-
   const body = await response.json().catch(() => null) as Record<string, unknown> | null;
   if (!response.ok) throw new Error(`BUYER_AGENT_AI_HTTP_${response.status}`);
   const call = extractFunctionCall(body);
