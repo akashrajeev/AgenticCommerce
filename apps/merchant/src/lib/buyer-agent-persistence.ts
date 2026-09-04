@@ -122,8 +122,17 @@ export async function persistBuyerAgentCheckpoint(run: BuyerAgentRunSnapshot, st
       )
       ON CONFLICT (id) DO UPDATE SET
         objective = EXCLUDED.objective,
-        campaign_id = EXCLUDED.campaign_id,
-        max_spend_paise = EXCLUDED.max_spend_paise
+        max_spend_paise = EXCLUDED.max_spend_paise,
+        currency = EXCLUDED.currency,
+        max_steps = EXCLUDED.max_steps,
+        state = EXCLUDED.state,
+        step_count = EXCLUDED.step_count,
+        planner_calls = EXCLUDED.planner_calls,
+        planner_model = EXCLUDED.planner_model,
+        last_error = EXCLUDED.last_error,
+        workspace = EXCLUDED.workspace,
+        updated_at = EXCLUDED.updated_at,
+        completed_at = EXCLUDED.completed_at
     `;
     if (step) {
       await tx`
