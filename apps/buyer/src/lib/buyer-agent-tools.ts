@@ -107,12 +107,7 @@ export const BUYER_AGENT_TOOLS = BUYER_AGENT_TOOL_NAMES.map((name) => ({
 }));
 
 function toolParameters(name: BuyerAgentToolName) {
-  const commonQuantity = {
-    type: "integer",
-    minimum: 1,
-    maximum: 10,
-  } as const;
-
+  const commonQuantity = { type: "integer", minimum: 1, maximum: 10 } as const;
   switch (name) {
     case "discover_merchant":
     case "read_catalog":
@@ -131,81 +126,37 @@ function toolParameters(name: BuyerAgentToolName) {
       } as const;
     case "inspect_product":
     case "check_inventory":
-      return {
-        type: "object",
-        additionalProperties: false,
-        properties: { productId: { type: "string", minLength: 1, maxLength: 100 } },
-        required: ["productId"],
-      } as const;
+      return { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 } }, required: ["productId"] } as const;
     case "get_quote":
       return {
         type: "object",
         additionalProperties: false,
         properties: {
           lineItems: {
-            type: "array",
-            minItems: 1,
-            maxItems: 10,
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                productId: { type: "string", minLength: 1, maxLength: 100 },
-                quantity: commonQuantity,
-              },
-              required: ["productId", "quantity"],
-            },
+            type: "array", minItems: 1, maxItems: 10,
+            items: { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 }, quantity: commonQuantity }, required: ["productId", "quantity"] },
           },
         },
         required: ["lineItems"],
       } as const;
     case "compare_products":
-      return {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          productIds: { type: "array", minItems: 2, maxItems: 5, items: { type: "string", minLength: 1, maxLength: 100 } },
-        },
-        required: ["productIds"],
-      } as const;
+      return { type: "object", additionalProperties: false, properties: { productIds: { type: "array", minItems: 2, maxItems: 5, items: { type: "string", minLength: 1, maxLength: 100 } } }, required: ["productIds"] } as const;
     case "get_merchant_recommendations":
-      return {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          productId: { type: "string", minLength: 1, maxLength: 100 },
-        },
-        required: ["productId"],
-      } as const;
+      return { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 } }, required: ["productId"] } as const;
     case "build_basket":
       return {
         type: "object",
         additionalProperties: false,
         properties: {
           lineItems: {
-            type: "array",
-            minItems: 1,
-            maxItems: 10,
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                productId: { type: "string", minLength: 1, maxLength: 100 },
-                quantity: commonQuantity,
-              },
-              required: ["productId", "quantity"],
-            },
+            type: "array", minItems: 1, maxItems: 10,
+            items: { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 }, quantity: commonQuantity }, required: ["productId", "quantity"] },
           },
         },
         required: ["lineItems"],
       } as const;
     case "validate_budget":
-      return {
-        type: "object",
-        additionalProperties: false,
-        properties: { totalPaise: { type: "integer", minimum: 0 } },
-        required: ["totalPaise"],
-      } as const;
+      return { type: "object", additionalProperties: false, properties: { totalPaise: { type: "integer", minimum: 0 } }, required: ["totalPaise"] } as const;
     case "prepare_approval":
       return { type: "object", additionalProperties: false, properties: {} } as const;
   }
@@ -227,19 +178,15 @@ function requireLineItems(value: unknown): BuyerBasketLine[] {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("BUYER_AGENT_LINE_ITEMS_INVALID");
     const item = entry as Record<string, unknown>;
     const productId = requireString(item.productId, "BUYER_AGENT_LINE_ITEMS_INVALID");
-    const quantity = item.quantity;
-    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 10) throw new Error("BUYER_AGENT_LINE_ITEMS_INVALID");
+    const quantityValue = item.quantity;
+    if (!Number.isSafeInteger(quantityValue) || quantityValue < 1 || quantityValue > 10) throw new Error("BUYER_AGENT_LINE_ITEMS_INVALID");
+    const quantity = quantityValue as number;
     return { productId, quantity };
   });
 }
 
 async function merchantFetch<T>(context: BuyerAgentToolContext, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${merchantUrl(context)}${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-    cache: "no-store",
-    signal: AbortSignal.timeout(12_000),
-  });
+  const response = await fetch(`${merchantUrl(context)}${path}`, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) }, cache: "no-store", signal: AbortSignal.timeout(12_000) });
   const body = await response.json().catch(() => null) as T | { error?: string } | null;
   if (!response.ok) {
     const detail = body && typeof body === "object" && "error" in body && typeof body.error === "string" ? body.error : `HTTP_${response.status}`;
@@ -260,14 +207,7 @@ function normalizeText(value: string): string[] {
 async function discoverMerchant(context: BuyerAgentToolContext): Promise<BuyerMerchantManifest> {
   const body = await merchantFetch<{ merchantId?: string; name?: string; version?: string; currency?: "INR"; capabilities?: Record<string, boolean | string>; endpoints?: Record<string, string> }>(context, "/.well-known/agent-commerce");
   if (!body?.merchantId || !body.name || !body.version || body.currency !== "INR" || !body.endpoints) throw new Error("BUYER_AGENT_MANIFEST_INVALID");
-  const manifest: BuyerMerchantManifest = {
-    merchantId: body.merchantId,
-    name: body.name,
-    version: body.version,
-    currency: "INR",
-    capabilities: body.capabilities ?? {},
-    endpoints: body.endpoints,
-  };
+  const manifest: BuyerMerchantManifest = { merchantId: body.merchantId, name: body.name, version: body.version, currency: "INR", capabilities: body.capabilities ?? {}, endpoints: body.endpoints };
   context.workspace.manifest = manifest;
   return manifest;
 }
@@ -283,15 +223,15 @@ function searchProducts(context: BuyerAgentToolContext, args: Record<string, unk
   const catalog = ensureCatalog(context);
   const query = typeof args.query === "string" ? args.query.trim() : "";
   const category = typeof args.category === "string" ? args.category.trim().toLowerCase() : "";
-  const maxPricePaise = args.maxPricePaise === undefined ? context.run.constraints.maxSpendPaise : args.maxPricePaise;
-  const inStockOnly = args.inStockOnly === undefined ? true : args.inStockOnly;
-  if (!Number.isSafeInteger(maxPricePaise) || maxPricePaise < 0) throw new Error("BUYER_AGENT_SEARCH_BUDGET_INVALID");
+  const maxPriceRaw = args.maxPricePaise === undefined ? context.run.constraints.maxSpendPaise : args.maxPricePaise;
+  if (!Number.isSafeInteger(maxPriceRaw) || (maxPriceRaw as number) < 0) throw new Error("BUYER_AGENT_SEARCH_BUDGET_INVALID");
+  const maxPricePaise = maxPriceRaw as number;
+  const inStockOnly = args.inStockOnly === undefined ? true : args.inStockOnly === true;
   const queryTokens = normalizeText(query);
   const results = catalog.filter((product) => {
     if (category && product.category.toLowerCase() !== category) return false;
     if (product.pricePaise > Math.min(maxPricePaise, context.run.constraints.maxSpendPaise)) return false;
     if (inStockOnly && product.inventory < 1) return false;
-    if (!context.run.constraints.requiredProductIds?.length && !context.run.constraints.requiredCategory && !queryTokens.length) return true;
     if (context.run.constraints.requiredProductIds?.length && !context.run.constraints.requiredProductIds.includes(product.id)) return false;
     if (context.run.constraints.requiredCategory && product.category.toLowerCase() !== context.run.constraints.requiredCategory.toLowerCase()) return false;
     if (!queryTokens.length) return true;
@@ -312,17 +252,15 @@ async function inspectProduct(context: BuyerAgentToolContext, args: Record<strin
 async function checkInventory(context: BuyerAgentToolContext, args: Record<string, unknown>): Promise<{ productId: string; inventory: number }> {
   const productId = requireString(args.productId, "BUYER_AGENT_PRODUCT_ID_REQUIRED");
   const body = await merchantFetch<{ inventory?: number }>(context, `/api/agent/inventory/${encodeURIComponent(productId)}`);
-  if (!Number.isSafeInteger(body?.inventory) || (body?.inventory ?? -1) < 0) throw new Error("BUYER_AGENT_INVENTORY_INVALID");
-  context.workspace.inventory[productId] = body.inventory;
-  return { productId, inventory: body.inventory };
+  const inventory = body?.inventory;
+  if (!Number.isSafeInteger(inventory) || inventory < 0) throw new Error("BUYER_AGENT_INVENTORY_INVALID");
+  context.workspace.inventory[productId] = inventory;
+  return { productId, inventory };
 }
 
 async function getQuote(context: BuyerAgentToolContext, args: Record<string, unknown>): Promise<BuyerQuote> {
   const lineItems = requireLineItems(args.lineItems);
-  const body = await merchantFetch<{ quote?: BuyerQuote }>(context, "/api/agent/checkout/preview", {
-    method: "POST",
-    body: JSON.stringify({ lineItems }),
-  });
+  const body = await merchantFetch<{ quote?: BuyerQuote }>(context, "/api/agent/checkout/preview", { method: "POST", body: JSON.stringify({ lineItems }) });
   if (!body?.quote || body.quote.currency !== "INR") throw new Error("BUYER_AGENT_QUOTE_INVALID");
   assertBuyerBudget(context.run, body.quote.totalPaise);
   context.workspace.latestQuote = body.quote;
@@ -334,23 +272,11 @@ function compareProducts(context: BuyerAgentToolContext, args: Record<string, un
   if (productIds.length < 2 || productIds.length > 5) throw new Error("BUYER_AGENT_COMPARE_PRODUCTS_INVALID");
   const products = productIds.map((id) => context.workspace.inspectedProducts[id] ?? context.workspace.catalog?.find((product) => product.id === id)).filter((product): product is BuyerProduct => Boolean(product));
   if (products.length !== productIds.length) throw new Error("BUYER_AGENT_COMPARE_PRODUCT_NOT_OBSERVED");
-  return {
-    products: products.map((product) => ({
-      productId: product.id,
-      name: product.name,
-      category: product.category,
-      pricePaise: product.pricePaise,
-      rating: product.rating,
-      inventory: product.inventory,
-      features: product.features,
-      specifications: product.specifications,
-    })),
-  };
+  return { products: products.map((product) => ({ productId: product.id, name: product.name, category: product.category, pricePaise: product.pricePaise, rating: product.rating, inventory: product.inventory, features: product.features, specifications: product.specifications })) };
 }
 
 async function getMerchantRecommendations(context: BuyerAgentToolContext, args: Record<string, unknown>): Promise<BuyerRecommendation[]> {
   const productId = requireString(args.productId, "BUYER_AGENT_PRODUCT_ID_REQUIRED");
-  if (productId !== context.workspace.selectedProductId) context.workspace.selectedProductId = productId;
   const body = await merchantFetch<{ recommendations?: BuyerRecommendation[] }>(context, `/api/agent/recommendations?productId=${encodeURIComponent(productId)}&maxSpendPaise=${context.run.constraints.maxSpendPaise}`);
   if (!Array.isArray(body?.recommendations)) throw new Error("BUYER_AGENT_RECOMMENDATIONS_INVALID");
   context.workspace.recommendations = body.recommendations;
@@ -360,9 +286,7 @@ async function getMerchantRecommendations(context: BuyerAgentToolContext, args: 
 async function buildBasket(context: BuyerAgentToolContext, args: Record<string, unknown>): Promise<{ basket: BuyerBasketLine[]; quote: BuyerQuote }> {
   const lineItems = requireLineItems(args.lineItems);
   const productIds = new Set(lineItems.map((line) => line.productId));
-  for (const requiredId of context.run.constraints.requiredProductIds ?? []) {
-    if (!productIds.has(requiredId)) throw new Error("BUYER_AGENT_REQUIRED_PRODUCT_MISSING");
-  }
+  for (const requiredId of context.run.constraints.requiredProductIds ?? []) if (!productIds.has(requiredId)) throw new Error("BUYER_AGENT_REQUIRED_PRODUCT_MISSING");
   for (const line of lineItems) {
     const observed = context.workspace.inspectedProducts[line.productId] ?? context.workspace.catalog?.find((product) => product.id === line.productId);
     if (!observed) throw new Error("BUYER_AGENT_BASKET_PRODUCT_NOT_OBSERVED");
@@ -377,34 +301,21 @@ async function buildBasket(context: BuyerAgentToolContext, args: Record<string, 
 
 function validateBudget(context: BuyerAgentToolContext, args: Record<string, unknown>): { totalPaise: number; maxSpendPaise: number; withinBudget: true } {
   const totalPaise = args.totalPaise;
-  if (!Number.isSafeInteger(totalPaise) || totalPaise < 0) throw new Error("BUYER_AGENT_TOTAL_INVALID");
-  assertBuyerBudget(context.run, totalPaise);
-  return { totalPaise, maxSpendPaise: context.run.constraints.maxSpendPaise, withinBudget: true };
+  if (!Number.isSafeInteger(totalPaise) || (totalPaise as number) < 0) throw new Error("BUYER_AGENT_TOTAL_INVALID");
+  const numericTotal = totalPaise as number;
+  assertBuyerBudget(context.run, numericTotal);
+  return { totalPaise: numericTotal, maxSpendPaise: context.run.constraints.maxSpendPaise, withinBudget: true };
 }
 
 function prepareApproval(context: BuyerAgentToolContext): unknown {
   if (!context.workspace.basket.length) throw new Error("BUYER_AGENT_BASKET_NOT_READY");
   if (!context.workspace.latestQuote) throw new Error("BUYER_AGENT_QUOTE_NOT_READY");
   assertBuyerBudget(context.run, context.workspace.latestQuote.totalPaise);
-  return {
-    status: "READY_FOR_APPROVAL",
-    merchantId: context.workspace.latestQuote.merchantId,
-    quoteId: context.workspace.latestQuote.quoteId,
-    lineItems: context.workspace.latestQuote.lineItems,
-    totalPaise: context.workspace.latestQuote.totalPaise,
-    currency: context.workspace.latestQuote.currency,
-    expiresAt: context.workspace.latestQuote.expiresAt,
-    reason: "Buyer Agent prepared this basket for explicit user review. No payment was authorized.",
-  };
+  return { status: "READY_FOR_APPROVAL", merchantId: context.workspace.latestQuote.merchantId, quoteId: context.workspace.latestQuote.quoteId, lineItems: context.workspace.latestQuote.lineItems, totalPaise: context.workspace.latestQuote.totalPaise, currency: context.workspace.latestQuote.currency, expiresAt: context.workspace.latestQuote.expiresAt, reason: "Buyer Agent prepared this basket for explicit user review. No payment was authorized." };
 }
 
 export function createBuyerAgentWorkspace(): BuyerAgentWorkspace {
-  return {
-    inspectedProducts: {},
-    inventory: {},
-    recommendations: [],
-    basket: [],
-  };
+  return { inspectedProducts: {}, inventory: {}, recommendations: [], basket: [] };
 }
 
 export function assertBuyerAgentToolName(name: string): asserts name is BuyerAgentToolName {
@@ -416,48 +327,22 @@ export function parseBuyerAgentToolArguments(value: unknown): Record<string, unk
   return value as Record<string, unknown>;
 }
 
-export async function executeBuyerAgentTool(
-  context: BuyerAgentToolContext,
-  name: string,
-  rawArguments: unknown = {},
-): Promise<BuyerAgentToolResult> {
+export async function executeBuyerAgentTool(context: BuyerAgentToolContext, name: string, rawArguments: unknown = {}): Promise<BuyerAgentToolResult> {
   assertBuyerAgentToolName(name);
   const args = parseBuyerAgentToolArguments(rawArguments);
   let result: unknown;
   switch (name) {
-    case "discover_merchant":
-      result = await discoverMerchant(context);
-      break;
-    case "read_catalog":
-      result = await readCatalog(context);
-      break;
-    case "search_products":
-      result = searchProducts(context, args);
-      break;
-    case "inspect_product":
-      result = await inspectProduct(context, args);
-      break;
-    case "check_inventory":
-      result = await checkInventory(context, args);
-      break;
-    case "get_quote":
-      result = await getQuote(context, args);
-      break;
-    case "compare_products":
-      result = compareProducts(context, args);
-      break;
-    case "get_merchant_recommendations":
-      result = await getMerchantRecommendations(context, args);
-      break;
-    case "build_basket":
-      result = await buildBasket(context, args);
-      break;
-    case "validate_budget":
-      result = validateBudget(context, args);
-      break;
-    case "prepare_approval":
-      result = prepareApproval(context);
-      break;
+    case "discover_merchant": result = await discoverMerchant(context); break;
+    case "read_catalog": result = await readCatalog(context); break;
+    case "search_products": result = searchProducts(context, args); break;
+    case "inspect_product": result = await inspectProduct(context, args); break;
+    case "check_inventory": result = await checkInventory(context, args); break;
+    case "get_quote": result = await getQuote(context, args); break;
+    case "compare_products": result = compareProducts(context, args); break;
+    case "get_merchant_recommendations": result = await getMerchantRecommendations(context, args); break;
+    case "build_basket": result = await buildBasket(context, args); break;
+    case "validate_budget": result = validateBudget(context, args); break;
+    case "prepare_approval": result = prepareApproval(context); break;
   }
   return { tool: name, result };
 }
