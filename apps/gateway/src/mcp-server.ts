@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import express, { type Request } from "express";
 import { config } from "./config.js";
-import { fetchOrder, fetchPayment, isRazorpayTestMode } from "./razorpay.js";
+import { fetchOrder, fetchPayment, isRazorpayTestMode, probeTestModeCredentials } from "./razorpay.js";
 
 const app = express();
 const port = Number.parseInt(process.env.MCP_PORT ?? "4100", 10);
@@ -66,7 +66,17 @@ async function callTool(name: string, args: Record<string, unknown>) {
 }
 
 app.use(express.json({ limit: "64kb" }));
-app.get("/health", (_request, response) => response.json({ app: "mandate-mcp", status: "ok", transport: "streamable-http", protocolVersions: [...protocolVersions], protocolVersion: MODERN_PROTOCOL_VERSION, razorpayTestMode: isRazorpayTestMode() }));
+app.get("/health", async (request, response) => {
+  const base = { app: "mandate-mcp", status: "ok", transport: "streamable-http", protocolVersions: [...protocolVersions], protocolVersion: MODERN_PROTOCOL_VERSION, razorpayTestMode: isRazorpayTestMode() };
+  if (request.query.deep !== "1") return response.json(base);
+  const started = Date.now();
+  try {
+    const probe = await probeTestModeCredentials();
+    return response.json({ ...base, razorpayApiReachable: probe.reachable, razorpayProbe: { ...probe, latencyMs: Date.now() - started } });
+  } catch (error) {
+    return response.status(503).json({ ...base, razorpayApiReachable: false, razorpayProbe: { reachable: false, testMode: isRazorpayTestMode(), detail: error instanceof Error ? error.message : "RAZORPAY_API_PROBE_FAILED", latencyMs: Date.now() - started } });
+  }
+});
 app.use((request, response, next) => { if (!isLocalOrigin(request.header("origin"))) return response.status(403).json({ error: "INVALID_MCP_ORIGIN" }); if (!authorizedRequest(request)) return response.status(401).json({ error: "UNAUTHORIZED_MCP_CLIENT" }); next(); });
 
 app.post("/mcp", async (request, response) => {
@@ -88,10 +98,10 @@ app.post("/mcp", async (request, response) => {
   }
 
   try {
-    if (message.method === "server/discover") return response.json(jsonRpc(id, { protocolVersion: MODERN_PROTOCOL_VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.3.0" } }));
+    if (message.method === "server/discover") return response.json(jsonRpc(id, { protocolVersion: MODERN_PROTOCOL_VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.3.1" } }));
     if (message.method === "initialize") {
       if (protocolVersion === MODERN_PROTOCOL_VERSION) return response.json(jsonRpcError(id, -32601, "initialize is not supported in MCP 2026-07-28; use server/discover"));
-      return response.json(jsonRpc(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.3.0" } }));
+      return response.json(jsonRpc(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.3.1" } }));
     }
     if (message.method === "notifications/initialized") return protocolVersion === MODERN_PROTOCOL_VERSION ? response.status(204).end() : response.status(202).end();
     if (message.method === "ping") return response.json(jsonRpc(id, {}));
