@@ -4,7 +4,7 @@ import {
   getGrowthAgentRun,
   listGrowthAgentRuns,
   runGrowthAgent,
-} from "../../../../../lib/growth-agent";
+} from "../../../../lib/growth-agent";
 
 export const dynamic = "force-dynamic";
 
