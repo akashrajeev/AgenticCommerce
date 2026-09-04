@@ -20,10 +20,12 @@ async function probeMcp(): Promise<Probe> {
   if (!MCP_AGENT_TOKEN) return { ok: false, status: 0, detail: "MCP_AGENT_TOKEN_NOT_CONFIGURED" };
   try {
     const common = { "content-type": "application/json", authorization: `Bearer ${MCP_AGENT_TOKEN}`, "mcp-protocol-version": "2026-07-28" };
-    const health = await fetch(`${MCP_INTERNAL_URL}/health`, { cache: "no-store", signal: AbortSignal.timeout(4000) });
-    const healthBody = await health.json().catch(() => null) as { razorpayTestMode?: unknown } | null;
-    const testMode = healthBody?.razorpayTestMode === true;
-    if (!health.ok || !testMode) return { ok: false, status: health.status, detail: testMode ? `MCP health HTTP ${health.status}` : "Razorpay Test Mode attestation failed" };
+    const health = await fetch(`${MCP_INTERNAL_URL}/health?deep=1`, { cache: "no-store", signal: AbortSignal.timeout(6000) });
+    const healthBody = await health.json().catch(() => null) as { razorpayTestMode?: unknown; razorpayApiReachable?: unknown; razorpayProbe?: { detail?: unknown; latencyMs?: unknown } } | null;
+    if (!health.ok || healthBody?.razorpayTestMode !== true || healthBody?.razorpayApiReachable !== true) {
+      const detail = typeof healthBody?.razorpayProbe?.detail === "string" ? healthBody.razorpayProbe.detail : healthBody?.razorpayTestMode !== true ? "Razorpay Test Mode attestation failed" : "Razorpay Test API unreachable";
+      return { ok: false, status: health.status, detail };
+    }
 
     const discover = await fetch(`${MCP_INTERNAL_URL}/mcp`, { method: "POST", headers: { ...common, "mcp-method": "server/discover" }, body: JSON.stringify({ jsonrpc: "2.0", id: "probe-discover", method: "server/discover" }), cache: "no-store", signal: AbortSignal.timeout(4000) });
     const discoverBody = await discover.json().catch(() => null) as { result?: { protocolVersion?: string }; error?: { message?: string } } | null;
@@ -31,7 +33,8 @@ async function probeMcp(): Promise<Probe> {
     const tools = await fetch(`${MCP_INTERNAL_URL}/mcp`, { method: "POST", headers: { ...common, "mcp-method": "tools/list" }, body: JSON.stringify({ jsonrpc: "2.0", id: "probe-tools", method: "tools/list" }), cache: "no-store", signal: AbortSignal.timeout(4000) });
     const toolsBody = await tools.json().catch(() => null) as { result?: { tools?: unknown[] }; error?: { message?: string } } | null;
     const count = Array.isArray(toolsBody?.result?.tools) ? toolsBody.result!.tools!.length : 0;
-    return { ok: tools.ok && count > 0, status: tools.status, detail: `MCP ${discoverBody.result.protocolVersion} · ${count} guarded tools · Razorpay Test Mode` };
+    const latency = typeof healthBody.razorpayProbe?.latencyMs === "number" ? ` · Razorpay API ${healthBody.razorpayProbe.latencyMs}ms` : "";
+    return { ok: tools.ok && count > 0, status: tools.status, detail: `MCP ${discoverBody.result.protocolVersion} · ${count} guarded tools · Razorpay Test Mode API live${latency}` };
   } catch (error) { return { ok: false, status: 0, detail: error instanceof Error ? error.message : "MCP_UNAVAILABLE" }; }
 }
 
