@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import express, { type Request } from "express";
 import { config } from "./config.js";
+import { loadCampaignPaymentEvidence, saveCampaignPaymentEvidence } from "./persistence-prisma.js";
 
 const app = express();
 const port = Number.parseInt(process.env.MCP_PORT ?? "4100", 10);
@@ -10,12 +11,13 @@ const protocolVersions = new Set(["2025-06-18", "2025-11-25", "2026-07-28"]);
 const MODERN_PROTOCOL_VERSION = "2026-07-28";
 
 const tools = [
-  { name: "mandate_razorpay_create_order", description: "Create a Razorpay order only for an already authorized MANDATE transaction. Never provide an amount from the model; the gateway transaction remains authoritative.", inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" }, campaignId: { type: "string", minLength: 1, maxLength: 40 } }, required: ["authorizationId", "transactionId"] } },
+  { name: "mandate_razorpay_create_order", description: "Create a Razorpay order only for an already authorized MANDATE transaction. Never provide an amount from the model; the gateway transaction remains authoritative. Optionally attach a validated growth campaign ID to the Test Mode order notes.", inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" }, campaignId: { type: "string", minLength: 1, maxLength: 40 } }, required: ["authorizationId", "transactionId"] } },
   { name: "mandate_razorpay_fetch_order", description: "Retrieve gateway-authoritative evidence for a Razorpay order after proving the order ID is bound to the supplied transaction.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, orderId: { type: "string" } }, required: ["transactionId", "orderId"] } },
   { name: "mandate_razorpay_fetch_payment", description: "Retrieve gateway-authoritative evidence for a Razorpay payment after proving the payment ID is bound to the supplied transaction.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["transactionId", "paymentId"] } },
   { name: "mandate_razorpay_capture_payment", description: "Capture a Razorpay payment through the existing gateway transaction boundary. A valid MANDATE authorization and matching transaction are mandatory.", inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" }, paymentId: { type: "string" } }, required: ["authorizationId", "transactionId", "paymentId"] } },
-  { name: "mandate_razorpay_verify_settlement", description: "Re-read the bound Razorpay order and payment from Razorpay Test Mode and prove amount, order binding, and captured-payment state before treating merchant revenue as payment-verified.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, orderId: { type: "string" }, paymentId: { type: "string" } }, required: ["transactionId", "orderId", "paymentId"] } },
+  { name: "mandate_razorpay_verify_settlement", description: "Re-read the bound Razorpay order and payment from Razorpay Test Mode and prove amount, order binding, and captured-payment state before treating merchant revenue as payment-verified. Campaign-linked captures are persisted in the revenue evidence ledger.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" }, orderId: { type: "string" }, paymentId: { type: "string" } }, required: ["transactionId", "orderId", "paymentId"] } },
   { name: "mandate_razorpay_explain_transaction", description: "Read-only explanation of why a transaction is or is not payment-ready. Returns the authoritative intent, quote, mandate binding, policy checks and audit timeline without executing a payment.", inputSchema: { type: "object", additionalProperties: false, properties: { transactionId: { type: "string" } }, required: ["transactionId"] } },
+  { name: "mandate_campaign_payment_evidence", description: "Read-only durable ledger of campaign-linked Razorpay Test Mode payment evidence. Returns evidence recorded only after independent Test Mode capture verification.", inputSchema: { type: "object", additionalProperties: false, properties: { campaignId: { type: "string", maxLength: 40 } }, required: [] } },
 ];
 
 function jsonRpc(id: unknown, result: unknown) { return { jsonrpc: "2.0", id, result }; }
@@ -89,9 +91,17 @@ async function callTool(name: string, args: Record<string, unknown>) {
       if (!amountMatches) throw new Error("RAZORPAY_LIVE_AMOUNT_MISMATCH");
       if (!orderMatches) throw new Error("RAZORPAY_LIVE_BINDING_MISMATCH");
       if (!captured) throw new Error("RAZORPAY_LIVE_PAYMENT_NOT_CAPTURED");
-      return { verified: true, testMode: true, transactionId, orderId, paymentId, amountPaise: expectedAmount, currency: payment.currency, order: { id: order.id, status: order.status, amount: order.amount, amountPaid: order.amount_paid, receipt: order.receipt, notes: order.notes }, payment: { id: payment.id, status: payment.status, amount: payment.amount, currency: payment.currency, orderId: payment.order_id, method: payment.method ?? null } };
+      const notes = asRecord(order.notes);
+      const campaignId = typeof notes?.growth_campaign_id === "string" ? notes.growth_campaign_id : "";
+      let campaignEvidenceId: string | null = null;
+      if (campaignId) {
+        campaignEvidenceId = `campaign:${campaignId}:${transactionId}`;
+        await saveCampaignPaymentEvidence({ evidenceId: campaignEvidenceId, campaignId, transactionId, razorpayOrderId: orderId, razorpayPaymentId: paymentId, amountPaise: expectedAmount, currency: String(payment.currency ?? "INR"), orderNotes: notes as Record<string, string>, verifiedAt: new Date().toISOString() });
+      }
+      return { verified: true, testMode: true, transactionId, orderId, paymentId, amountPaise: expectedAmount, currency: payment.currency, campaignId: campaignId || null, campaignEvidenceId, order: { id: order.id, status: order.status, amount: order.amount, amountPaid: order.amount_paid, receipt: order.receipt, notes: order.notes }, payment: { id: payment.id, status: payment.status, amount: payment.amount, currency: payment.currency, orderId: payment.order_id, method: payment.method ?? null } };
     }
     case "mandate_razorpay_explain_transaction": return explainTransaction(requiredString(args, "transactionId"));
+    case "mandate_campaign_payment_evidence": { const campaignId = typeof args.campaignId === "string" && args.campaignId.trim() ? args.campaignId.trim() : undefined; return { testModeOnly: true, evidence: await loadCampaignPaymentEvidence(campaignId) }; }
     default: throw new Error("TOOL_NOT_FOUND");
   }
 }
@@ -131,10 +141,10 @@ app.post("/mcp", async (request, response) => {
   }
 
   try {
-    if (message.method === "server/discover") return response.json(jsonRpc(id, { protocolVersion: MODERN_PROTOCOL_VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.5.0" } }));
+    if (message.method === "server/discover") return response.json(jsonRpc(id, { protocolVersion: MODERN_PROTOCOL_VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.6.0" } }));
     if (message.method === "initialize") {
       if (protocolVersion === MODERN_PROTOCOL_VERSION) return response.json(jsonRpcError(id, -32601, "initialize is not supported in MCP 2026-07-28; use server/discover"));
-      return response.json(jsonRpc(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.5.0" } }));
+      return response.json(jsonRpc(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.6.0" } }));
     }
     if (message.method === "notifications/initialized") return protocolVersion === MODERN_PROTOCOL_VERSION ? response.status(204).end() : response.status(202).end();
     if (message.method === "ping") return response.json(jsonRpc(id, {}));
