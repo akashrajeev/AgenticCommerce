@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { growthCampaigns } from "../../../../../lib/campaigns";
-import { getGrowthExperiment, listGrowthExperimentAssignments, type GrowthExperimentCohort } from "../../../../../lib/growth-experiment-persistence";
+import {
+  createOrUpdateGrowthExperimentExecution,
+  getGrowthExperiment,
+  getGrowthExperimentExecution,
+  listGrowthExperimentAssignments,
+  type GrowthExperimentCohort,
+  type GrowthExperimentExecution,
+} from "../../../../../lib/growth-experiment-persistence";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +34,9 @@ function record(value: unknown): RecordValue | null {
 
 function authorization(transaction: RecordValue): RecordValue | null {
   const value = record(transaction.mandateAuthorization);
-  if (transaction.state !== "policy_authorized" || value?.status !== "authorized" || typeof value.authorizationId !== "string" || transaction.razorpayOrderId) return null;
+  if (!value || value.status !== "authorized" || typeof value.authorizationId !== "string") return null;
+  const state = typeof transaction.state === "string" ? transaction.state : "";
+  if (!["policy_authorized", "razorpay_order_created", "checkout_started", "payment_authorized"].includes(state)) return null;
   return value;
 }
 
@@ -96,6 +105,10 @@ async function createOrder(candidate: Candidate, campaignId?: string) {
   }
 }
 
+function attemptFor(execution: GrowthExperimentExecution | undefined): number {
+  return execution ? execution.attempt + 1 : 0;
+}
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { experimentId?: unknown; cohorts?: unknown } | null;
   const experimentId = typeof body?.experimentId === "string" ? body.experimentId.trim() : "";
@@ -115,15 +128,70 @@ export async function POST(request: Request) {
     const byId = new Map(transactions.map((transaction) => [String(transaction.id), transaction]));
     const results = [];
     for (const assignment of assignments.filter((item) => requestedCohorts.has(item.cohort))) {
+      const existingExecution = await getGrowthExperimentExecution(experimentId, assignment.transactionId);
       const transaction = byId.get(assignment.transactionId);
       const candidate = transaction ? candidateForAssignment(transaction, assignment) : null;
+
       if (!candidate) {
-        results.push({ transactionId: assignment.transactionId, cohort: assignment.cohort, ok: false, error: "EXPERIMENT_TRANSACTION_NOT_PAYMENT_READY" });
+        if (existingExecution?.status === "PAYMENT_PENDING" || existingExecution?.status === "ORDER_CREATED" || existingExecution?.status === "CONFIRMED") {
+          results.push({ ...assignment, ok: true, recovered: true, execution: existingExecution });
+          continue;
+        }
+        const failedExecution: GrowthExperimentExecution = {
+          experimentId,
+          transactionId: assignment.transactionId,
+          cohort: assignment.cohort,
+          status: "FAILED",
+          attempt: attemptFor(existingExecution),
+          lastError: "EXPERIMENT_TRANSACTION_NOT_PAYMENT_READY",
+          startedAt: existingExecution?.startedAt ?? new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        await createOrUpdateGrowthExperimentExecution(failedExecution);
+        results.push({ ...assignment, ok: false, error: failedExecution.lastError, execution: failedExecution });
         continue;
       }
-      results.push(await createOrder(candidate, assignment.cohort === "treatment" ? experiment.campaignId : undefined));
+
+      const now = new Date().toISOString();
+      const startedAt = existingExecution?.startedAt ?? now;
+      const executionStart: GrowthExperimentExecution = {
+        experimentId,
+        transactionId: assignment.transactionId,
+        cohort: assignment.cohort,
+        status: "READY",
+        attempt: attemptFor(existingExecution),
+        ...(existingExecution?.razorpayOrderId ? { razorpayOrderId: existingExecution.razorpayOrderId } : {}),
+        ...(existingExecution?.razorpayPaymentId ? { razorpayPaymentId: existingExecution.razorpayPaymentId } : {}),
+        startedAt,
+        updatedAt: now,
+      };
+      await createOrUpdateGrowthExperimentExecution(executionStart);
+
+      const paymentOrder = await createOrder(candidate, assignment.cohort === "treatment" ? experiment.campaignId : undefined);
+      if (!paymentOrder.ok) {
+        const executionFailure: GrowthExperimentExecution = {
+          ...executionStart,
+          status: "FAILED",
+          lastError: paymentOrder.error ?? "MCP_CREATE_ORDER_FAILED",
+          updatedAt: new Date().toISOString(),
+        };
+        await createOrUpdateGrowthExperimentExecution(executionFailure);
+        results.push({ ...paymentOrder, execution: executionFailure });
+        continue;
+      }
+
+      const order = record(paymentOrder.order);
+      const executionReady: GrowthExperimentExecution = {
+        ...executionStart,
+        status: "PAYMENT_PENDING",
+        ...(typeof order?.id === "string" ? { razorpayOrderId: order.id } : {}),
+        lastError: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      await createOrUpdateGrowthExperimentExecution(executionReady);
+      results.push({ ...paymentOrder, execution: executionReady });
     }
-    return NextResponse.json({ testModeOnly: true, experiment, campaignId: campaign.id, requestedCohorts: [...requestedCohorts], results, next: "Complete each Razorpay Test Mode Checkout, then use the experiment evidence view to calculate observed AOV uplift." }, { headers: { "cache-control": "no-store" } });
+    return NextResponse.json({ testModeOnly: true, experiment, campaignId: campaign.id, requestedCohorts: [...requestedCohorts], results, recovery: "Re-run launch safely retries failed order-preparation attempts or returns existing payment-ready execution records; payment failures remain terminal at the underlying transaction and require a fresh transaction/authorization." }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "GROWTH_EXPERIMENT_LAUNCH_FAILED";
     return NextResponse.json({ error: message, testModeOnly: true }, { status: message === "GROWTH_EXPERIMENT_PERSISTENCE_NOT_CONFIGURED" ? 503 : 422 });
