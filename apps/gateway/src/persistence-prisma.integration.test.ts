@@ -4,8 +4,10 @@ import type { AuditEvent, CheckoutQuote, PurchaseIntent, Transaction } from "@ma
 import { closePersistence, initializePersistence } from "./persistence.js";
 import {
   claimWebhookEvent,
+  loadCampaignPaymentEvidence,
   releaseWebhookEvent,
   saveAuditEvent,
+  saveCampaignPaymentEvidence,
   saveTransaction,
 } from "./persistence-prisma.js";
 import { loadPrismaGatewayState } from "./persistence-prisma-read.js";
@@ -20,6 +22,7 @@ test("persists financial records and webhook idempotency through Prisma", { skip
   const transactionId = `it_tx_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
   const auditId = `it_audit_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
   const webhookKey = `it_webhook_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
+  const evidenceId = `it_evidence_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
   const now = new Date().toISOString();
   const intent: PurchaseIntent = {
     id: `intent_${transactionId}`,
@@ -76,6 +79,22 @@ test("persists financial records and webhook idempotency through Prisma", { skip
     assert.equal(persistedAudit?.transactionId, transactionId);
     assert.equal(persistedAudit?.action, auditEvent.action);
 
+    await saveCampaignPaymentEvidence({
+      evidenceId,
+      campaignId: "it-campaign",
+      transactionId,
+      razorpayOrderId: `order_test_${transactionId}`,
+      razorpayPaymentId: `pay_test_${transactionId}`,
+      amountPaise: 399900,
+      currency: "INR",
+      orderNotes: { growth_campaign_id: "it-campaign", source: "integration-test" },
+      verifiedAt: now,
+    });
+    const evidenceRows = await loadCampaignPaymentEvidence("it-campaign");
+    const persistedEvidence = evidenceRows.find((row) => row.evidenceId === evidenceId);
+    assert.equal(persistedEvidence?.transactionId, transactionId);
+    assert.equal(persistedEvidence?.amountPaise, 399900);
+
     const restored = await loadPrismaGatewayState();
     const restoredTransaction = restored.transactions.find((item) => item.id === transactionId);
     assert.equal(restoredTransaction?.state, "policy_authorized");
@@ -98,6 +117,7 @@ test("persists financial records and webhook idempotency through Prisma", { skip
     hydrateTransactionStore({ transactions: [], auditEvents: [] });
     await prisma.webhookEvent.deleteMany({ where: { dedupeKey: webhookKey } });
     await prisma.auditEvent.deleteMany({ where: { id: auditId } });
+    await prisma.campaignPaymentEvidence.deleteMany({ where: { evidenceId } });
     await prisma.transaction.deleteMany({ where: { id: transactionId } });
     await closePersistence();
     await closePrisma();
