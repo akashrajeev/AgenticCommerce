@@ -71,7 +71,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const input = await request.json().catch(() => null) as { transactionIds?: unknown } | null;
-  const transactionIds = Array.isArray(input?.transactionIds) ? input!.transactionIds.filter((value): value is string => typeof value === "string" && value.trim()).map((value) => value.trim()) : [];
+  const transactionIds = Array.isArray(input?.transactionIds) ? input!.transactionIds.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).map((value) => value.trim()) : [];
   if (transactionIds.length < 1 || transactionIds.length > 5) return NextResponse.json({ error: "BATCH_SIZE_MUST_BE_1_TO_5" }, { status: 400 });
 
   const body = await gatewayJson("/v1/transactions");
