@@ -54,5 +54,10 @@ jobs:
         env:
           DATABASE_URL: postgresql://mandate:mandate@localhost:5432/mandate
 
+      - name: Merchant growth experiment persistence smoke test
+        run: npm run test:integration -w @mandate/merchant
+        env:
+          DATABASE_URL: postgresql://mandate:mandate@localhost:5432/mandate
+
       - name: Build
         run: npm run build
