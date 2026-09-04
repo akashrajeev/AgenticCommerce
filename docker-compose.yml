@@ -113,6 +113,8 @@ services:
       MCP_AGENT_TOKEN: ${MCP_AGENT_TOKEN:-mandate-local-mcp}
       INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:-mandate-local-gateway}
       ACP_API_KEY: ${ACP_API_KEY:-mandate-local-acp}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6}
     ports:
       - "3000:3000"
     depends_on:
