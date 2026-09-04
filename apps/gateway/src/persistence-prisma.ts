@@ -108,65 +108,31 @@ async function ensureCampaignPaymentEvidenceTable(prisma: Awaited<ReturnType<typ
 export async function saveTransaction(transaction: Transaction): Promise<void> {
   const prisma = await getPrisma();
   if (!prisma) return saveTransactionSql(transaction);
-
   const data = {
     state: transaction.state,
     intent: jsonValue(transaction.intent),
     quote: jsonValue(transaction.quote),
     policy: transaction.policy === undefined ? undefined : jsonValue(transaction.policy),
-    mandateAuthorization:
-      transaction.mandateAuthorization === undefined ? undefined : jsonValue(transaction.mandateAuthorization),
+    mandateAuthorization: transaction.mandateAuthorization === undefined ? undefined : jsonValue(transaction.mandateAuthorization),
     razorpayOrderId: transaction.razorpayOrderId ?? undefined,
     razorpayPaymentId: transaction.razorpayPaymentId ?? undefined,
     createdAt: new Date(transaction.createdAt),
     updatedAt: new Date(transaction.updatedAt),
   };
-
-  await prisma.transaction.upsert({
-    where: { id: transaction.id },
-    create: { id: transaction.id, ...data },
-    update: data,
-  });
+  await prisma.transaction.upsert({ where: { id: transaction.id }, create: { id: transaction.id, ...data }, update: data });
 }
 
 export async function saveAuditEvent(event: AuditEvent): Promise<void> {
   const prisma = await getPrisma();
   if (!prisma) return saveAuditEventSql(event);
-
-  await prisma.auditEvent.upsert({
-    where: { id: event.id },
-    create: {
-      id: event.id,
-      transactionId: event.transactionId,
-      actor: event.actor,
-      action: event.action,
-      reason: event.reason,
-      metadata: event.metadata === undefined ? undefined : jsonValue(event.metadata),
-      createdAt: new Date(event.createdAt),
-    },
-    update: {},
-  });
+  await prisma.auditEvent.upsert({ where: { id: event.id }, create: { id: event.id, transactionId: event.transactionId, actor: event.actor, action: event.action, reason: event.reason, metadata: event.metadata === undefined ? undefined : jsonValue(event.metadata), createdAt: new Date(event.createdAt) }, update: {} });
 }
 
-export async function claimWebhookEvent(input: {
-  dedupeKey: string;
-  eventName: string;
-  razorpayOrderId?: string | null;
-  razorpayPaymentId?: string | null;
-}): Promise<boolean> {
+export async function claimWebhookEvent(input: { dedupeKey: string; eventName: string; razorpayOrderId?: string | null; razorpayPaymentId?: string | null; }): Promise<boolean> {
   const prisma = await getPrisma();
   if (!prisma) return claimWebhookEventSql(input);
-
   try {
-    await prisma.webhookEvent.create({
-      data: {
-        dedupeKey: input.dedupeKey,
-        eventName: input.eventName,
-        razorpayOrderId: input.razorpayOrderId ?? undefined,
-        razorpayPaymentId: input.razorpayPaymentId ?? undefined,
-        receivedAt: new Date(),
-      },
-    });
+    await prisma.webhookEvent.create({ data: { dedupeKey: input.dedupeKey, eventName: input.eventName, razorpayOrderId: input.razorpayOrderId ?? undefined, razorpayPaymentId: input.razorpayPaymentId ?? undefined, receivedAt: new Date() } });
     return true;
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") return false;
@@ -184,27 +150,7 @@ export async function saveNegotiationSession(input: PersistedNegotiationSession)
   const prisma = await getPrisma();
   if (!prisma) return;
   await ensureNegotiationSessionTable(prisma);
-  await prisma.negotiationSession.upsert({
-    where: { negotiationId: input.negotiationId },
-    create: {
-      negotiationId: input.negotiationId,
-      intent: jsonValue(input.intent),
-      merchant: jsonValue(input.merchant),
-      offers: jsonValue(input.offers),
-      offerAttestations: input.offerAttestations === undefined ? undefined : jsonValue(input.offerAttestations),
-      turns: jsonValue(input.turns),
-      createdAt: new Date(input.createdAt),
-      expiresAt: new Date(input.expiresAt),
-    },
-    update: {
-      intent: jsonValue(input.intent),
-      merchant: jsonValue(input.merchant),
-      offers: jsonValue(input.offers),
-      offerAttestations: input.offerAttestations === undefined ? undefined : jsonValue(input.offerAttestations),
-      turns: jsonValue(input.turns),
-      expiresAt: new Date(input.expiresAt),
-    },
-  });
+  await prisma.negotiationSession.upsert({ where: { negotiationId: input.negotiationId }, create: { negotiationId: input.negotiationId, intent: jsonValue(input.intent), merchant: jsonValue(input.merchant), offers: jsonValue(input.offers), offerAttestations: input.offerAttestations === undefined ? undefined : jsonValue(input.offerAttestations), turns: jsonValue(input.turns), createdAt: new Date(input.createdAt), expiresAt: new Date(input.expiresAt) }, update: { intent: jsonValue(input.intent), merchant: jsonValue(input.merchant), offers: jsonValue(input.offers), offerAttestations: input.offerAttestations === undefined ? undefined : jsonValue(input.offerAttestations), turns: jsonValue(input.turns), expiresAt: new Date(input.expiresAt) } });
 }
 
 export async function loadNegotiationSession(negotiationId: string): Promise<PersistedNegotiationSession | undefined> {
@@ -213,16 +159,7 @@ export async function loadNegotiationSession(negotiationId: string): Promise<Per
   await ensureNegotiationSessionTable(prisma);
   const row = await prisma.negotiationSession.findUnique({ where: { negotiationId } });
   if (!row || row.expiresAt.getTime() <= Date.now()) return undefined;
-  return {
-    negotiationId: row.negotiationId,
-    intent: row.intent as Record<string, unknown>,
-    merchant: row.merchant as PersistedNegotiationSession["merchant"],
-    offers: row.offers as unknown as MerchantOffer[],
-    offerAttestations: row.offerAttestations === null ? undefined : row.offerAttestations as unknown as MerchantOfferAttestation[],
-    turns: row.turns as Array<Record<string, unknown>>,
-    createdAt: row.createdAt.toISOString(),
-    expiresAt: row.expiresAt.toISOString(),
-  };
+  return { negotiationId: row.negotiationId, intent: row.intent as Record<string, unknown>, merchant: row.merchant as PersistedNegotiationSession["merchant"], offers: row.offers as unknown as MerchantOffer[], offerAttestations: row.offerAttestations === null ? undefined : row.offerAttestations as unknown as MerchantOfferAttestation[], turns: row.turns as Array<Record<string, unknown>>, createdAt: row.createdAt.toISOString(), expiresAt: row.expiresAt.toISOString() };
 }
 
 export async function deleteNegotiationSession(negotiationId: string): Promise<void> {
@@ -232,28 +169,14 @@ export async function deleteNegotiationSession(negotiationId: string): Promise<v
   await prisma.negotiationSession.deleteMany({ where: { negotiationId } });
 }
 
-export async function claimNegotiationAcceptance(input: {
-  key: string;
-  negotiationId: string;
-  mandateId: string;
-  offerId: string;
-}): Promise<boolean> {
+export async function claimNegotiationAcceptance(input: { key: string; negotiationId: string; mandateId: string; offerId: string }): Promise<boolean> {
   const prisma = await getPrisma();
   if (!prisma) return true;
   await ensureNegotiationAcceptanceClaimTable(prisma);
-
   const cutoff = new Date(Date.now() - NEGOTIATION_ACCEPTANCE_CLAIM_TTL_MS);
   await prisma.negotiationAcceptanceClaim.deleteMany({ where: { createdAt: { lt: cutoff } } });
   try {
-    await prisma.negotiationAcceptanceClaim.create({
-      data: {
-        key: input.key,
-        negotiationId: input.negotiationId,
-        mandateId: input.mandateId,
-        offerId: input.offerId,
-        createdAt: new Date(),
-      },
-    });
+    await prisma.negotiationAcceptanceClaim.create({ data: { key: input.key, negotiationId: input.negotiationId, mandateId: input.mandateId, offerId: input.offerId, createdAt: new Date() } });
     return true;
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") return false;
@@ -272,26 +195,7 @@ export async function saveNegotiationAcceptance(input: PersistedNegotiationAccep
   const prisma = await getPrisma();
   if (!prisma) return;
   await ensureNegotiationAcceptanceTable(prisma);
-  await prisma.negotiationAcceptance.upsert({
-    where: { key: input.key },
-    create: {
-      key: input.key,
-      negotiationId: input.negotiationId,
-      mandateId: input.mandateId,
-      offer: jsonValue(input.offer),
-      transactionId: input.transactionId,
-      executionId: input.executionId,
-      authorizationId: input.authorizationId,
-      createdAt: new Date(input.createdAt),
-    },
-    update: {
-      offer: jsonValue(input.offer),
-      transactionId: input.transactionId,
-      executionId: input.executionId,
-      authorizationId: input.authorizationId,
-      createdAt: new Date(input.createdAt),
-    },
-  });
+  await prisma.negotiationAcceptance.upsert({ where: { key: input.key }, create: { key: input.key, negotiationId: input.negotiationId, mandateId: input.mandateId, offer: jsonValue(input.offer), transactionId: input.transactionId, executionId: input.executionId, authorizationId: input.authorizationId, createdAt: new Date(input.createdAt) }, update: { offer: jsonValue(input.offer), transactionId: input.transactionId, executionId: input.executionId, authorizationId: input.authorizationId, createdAt: new Date(input.createdAt) } });
 }
 
 export async function loadNegotiationAcceptances(): Promise<PersistedNegotiationAcceptance[]> {
@@ -299,44 +203,20 @@ export async function loadNegotiationAcceptances(): Promise<PersistedNegotiation
   if (!prisma) return [];
   await ensureNegotiationAcceptanceTable(prisma);
   const rows = await prisma.negotiationAcceptance.findMany({ orderBy: { createdAt: "asc" } });
-  return rows.map((row) => ({
-    key: row.key,
-    negotiationId: row.negotiationId,
-    mandateId: row.mandateId,
-    offer: row.offer as unknown as MerchantOffer,
-    transactionId: row.transactionId,
-    executionId: row.executionId,
-    authorizationId: row.authorizationId,
-    createdAt: row.createdAt.toISOString(),
-  }));
+  return rows.map((row) => ({ key: row.key, negotiationId: row.negotiationId, mandateId: row.mandateId, offer: row.offer as unknown as MerchantOffer, transactionId: row.transactionId, executionId: row.executionId, authorizationId: row.authorizationId, createdAt: row.createdAt.toISOString() }));
 }
 
 export async function saveCampaignPaymentEvidence(input: PersistedCampaignPaymentEvidence): Promise<void> {
   const prisma = await getPrisma();
   if (!prisma) return;
   await ensureCampaignPaymentEvidenceTable(prisma);
-  await prisma.campaignPaymentEvidence.upsert({
-    where: { transactionId: input.transactionId },
-    create: {
-      evidenceId: input.evidenceId,
-      campaignId: input.campaignId,
-      transactionId: input.transactionId,
-      razorpayOrderId: input.razorpayOrderId,
-      razorpayPaymentId: input.razorpayPaymentId,
-      amountPaise: BigInt(input.amountPaise),
-      currency: input.currency,
-      orderNotes: input.orderNotes === undefined ? undefined : jsonValue(input.orderNotes),
-      verifiedAt: new Date(input.verifiedAt),
-    },
-    update: {
-      evidenceId: input.evidenceId,
-      campaignId: input.campaignId,
-      razorpayOrderId: input.razorpayOrderId,
-      razorpayPaymentId: input.razorpayPaymentId,
-      amountPaise: BigInt(input.amountPaise),
-      currency: input.currency,
-      orderNotes: input.orderNotes === undefined ? undefined : jsonValue(input.orderNotes),
-      verifiedAt: new Date(input.verifiedAt),
-    },
-  });
+  await prisma.campaignPaymentEvidence.upsert({ where: { transactionId: input.transactionId }, create: { evidenceId: input.evidenceId, campaignId: input.campaignId, transactionId: input.transactionId, razorpayOrderId: input.razorpayOrderId, razorpayPaymentId: input.razorpayPaymentId, amountPaise: BigInt(input.amountPaise), currency: input.currency, orderNotes: input.orderNotes === undefined ? undefined : jsonValue(input.orderNotes), verifiedAt: new Date(input.verifiedAt) }, update: { evidenceId: input.evidenceId, campaignId: input.campaignId, razorpayOrderId: input.razorpayOrderId, razorpayPaymentId: input.razorpayPaymentId, amountPaise: BigInt(input.amountPaise), currency: input.currency, orderNotes: input.orderNotes === undefined ? undefined : jsonValue(input.orderNotes), verifiedAt: new Date(input.verifiedAt) } });
+}
+
+export async function loadCampaignPaymentEvidence(campaignId?: string): Promise<PersistedCampaignPaymentEvidence[]> {
+  const prisma = await getPrisma();
+  if (!prisma) return [];
+  await ensureCampaignPaymentEvidenceTable(prisma);
+  const rows = await prisma.campaignPaymentEvidence.findMany({ where: campaignId ? { campaignId } : undefined, orderBy: { verifiedAt: "asc" } });
+  return rows.map((row) => ({ evidenceId: row.evidenceId, campaignId: row.campaignId, transactionId: row.transactionId, razorpayOrderId: row.razorpayOrderId, razorpayPaymentId: row.razorpayPaymentId, amountPaise: Number(row.amountPaise), currency: row.currency, orderNotes: row.orderNotes && typeof row.orderNotes === "object" && !Array.isArray(row.orderNotes) ? row.orderNotes as Record<string, string> : undefined, verifiedAt: row.verifiedAt.toISOString() }));
 }
