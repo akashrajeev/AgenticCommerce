@@ -10,7 +10,7 @@ This page prevents protocol-name drift and over-claiming. Each protocol is class
 | NPCI UAP | **Research / adapter-ready** | A typed NPCI delegation profile captures verified delegated-payment constraints and maps them into the MANDATE authority core without fabricating a UAP wire protocol. | No claim of native UAP implementation; no public authoritative UAP wire specification was available during the current research pass. |
 | x402 | **Implemented; Phase 10 experiment** | A standalone x402 v2 agent-service resource server emits `PAYMENT-REQUIRED`, accepts `PAYMENT-SIGNATURE`, verifies/settles through a configured facilitator, and enforces a signed MANDATE service authorization before settlement. | No claim that the repository is the x402 reference implementation; no claim of a completed live testnet settlement until configured and exercised. |
 | Razorpay Test Mode | **Implemented; Phase 8 UPI golden run in progress** | Real Orders, Standard Checkout, payment retrieval/capture, server-side checkout signature verification and signed webhooks. The flagship buyer flow routes payment-order creation through the mandate-gated gateway boundary. | The repository does not claim that a real UPI success/failure transaction has been executed until the Test Mode flow is exercised with configured credentials. Test Mode is not production payment processing. |
-| MANDATE MCP Policy Facade | **Implemented; Phase 9 experiment** | Exposes an MCP-compatible `/mcp` JSON-RPC tool surface for guarded Razorpay order/payment operations, with the current stateless `2026-07-28` transport and explicit 2025 compatibility. Payment-changing tools terminate at MANDATE authorization and call the existing gateway rather than Razorpay directly. | Not the official Razorpay MCP server; no claim of full external MCP certification or direct upstream Razorpay MCP interoperability. |
+| MANDATE MCP Policy Facade | **Implemented; Phase 9 experiment** | Exposes an MCP-compatible `/mcp` JSON-RPC tool surface for guarded Razorpay order/payment operations, with the current stateless `2026-07-28` transport and explicit 2025 compatibility. Payment-changing tools terminate at MANDATE authorization and call the existing gateway rather than Razorpay directly. A read-only transaction explanation tool exposes intent, quote, mandate, policy and audit evidence without payment side effects. | Not the official Razorpay MCP server; no claim of full external MCP certification or direct upstream Razorpay MCP interoperability. |
 | Unified Protocol Control Plane | **Implemented; Phase 12 demo** | Shared protocol registry, runtime health matrix and resolver expose which protocols are executable, experimental, adapter-target, aligned or research-ready. The buyer-facing `/protocols` surface routes four agent intents through the appropriate executable adapter while keeping MANDATE as the authority boundary. | No claim that non-executable external protocols are production-integrated merely because they appear in the registry. |
 
 ## Phase progression
@@ -75,7 +75,7 @@ Delegated mandates support per-purchase and total budgets, merchant/product allo
 
 Negotiation adds buyer-agent ↔ merchant-agent intent/offer exchange, signed merchant offer attestations, authoritative quote revalidation, durable negotiation sessions and single-writer acceptance idempotency.
 
-Growth opportunities combine merchant-controlled recommendation logic with live bundle quotes and route approved baskets through the same policy/payment authority. Confirmed merchant orders are the source of realized revenue attribution.
+Growth opportunities combine merchant-controlled recommendation logic with live bundle quotes and route approved baskets through the same policy/payment authority. Confirmed merchant orders are the source of realized revenue attribution. Campaign attribution additionally requires the exact `growth_campaign_id` stored on the Razorpay order and recovered from independently verified Test Mode evidence.
 
 ## Phase 8 evidence
 
@@ -92,6 +92,8 @@ buyer agent intent
 → bounded webhook/API reconciliation polling
 → merchant-order confirmation
 ```
+
+The `/growth-batch` surface extends the same path to a bounded cohort of up to five real policy-authorized transactions and opens Razorpay Standard Checkout for each created Test Mode order. The `/campaigns/attribution` and `/judge` surfaces independently re-read Razorpay Test Mode evidence before counting campaign-owned uplift.
 
 For the real Test Mode UPI proof, use Razorpay's documented test identifiers:
 
@@ -129,9 +131,10 @@ mandate_razorpay_fetch_order
 mandate_razorpay_fetch_payment
 mandate_razorpay_capture_payment
 mandate_razorpay_verify_settlement
+mandate_razorpay_explain_transaction
 ```
 
-Payment-changing operations require a valid MANDATE authorization ID and transaction binding. The MCP service sends trusted internal requests to the gateway; it does not hold or expose Razorpay API secrets to the agent.
+Payment-changing operations require a valid MANDATE authorization ID and transaction binding. The explain operation is explicitly read-only and returns the authoritative transaction intent, quote, mandate binding, policy checks, Razorpay references and audit timeline without executing payment. The MCP service sends trusted internal requests to the gateway and keeps Razorpay credentials behind the trusted payment boundary.
 
 Local Compose exposes the facade at:
 
@@ -141,8 +144,8 @@ http://localhost:4100/mcp
 
 ## Phase 10 evidence
 
-The x402 adapter is implemented separately from the Razorpay payment rail. It supports the HTTP-native v2 challenge/settlement flow and requires a signed MANDATE service authorization before facilitator settlement.
+The x402 adapter is implemented separately from the Razorpay payment rail. It supports the HTTP-native v2 challenge/settlement flow and requires a signed MANDATE service authorization before facilitator settlement. The browser flow uses a wallet signature for the actual Base Sepolia payment and exposes the facilitator transaction hash when settlement succeeds.
 
 ## Phase 11 / 12 evidence
 
-The NPCI UAP profile is intentionally research-bound and adapter-ready rather than a claimed native UAP implementation. The unified control plane at `/protocols` shows live executable MCP/Razorpay and x402 probes alongside explicit non-executable ACP/AP2/UAP statuses.
+The NPCI UAP profile is intentionally research-bound and adapter-ready rather than a claimed native UAP implementation. The unified control plane at `/protocols` shows live executable MCP/Razorpay and x402 probes alongside explicit non-executable ACP/AP2/UAP statuses. Judge Mode links the flagship payment, growth, Test Mode cohort, campaign attribution, MCP guard, protocols and unified proof surfaces from one live sweep.
