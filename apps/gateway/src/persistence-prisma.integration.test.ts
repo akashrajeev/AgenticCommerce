@@ -4,10 +4,13 @@ import type { AuditEvent, CheckoutQuote, PurchaseIntent, Transaction } from "@ma
 import { closePersistence, initializePersistence } from "./persistence.js";
 import {
   claimWebhookEvent,
+  deleteGrowthAgentRun,
   loadCampaignPaymentEvidence,
+  loadGrowthAgentRun,
   releaseWebhookEvent,
   saveAuditEvent,
   saveCampaignPaymentEvidence,
+  saveGrowthAgentCheckpoint,
   saveTransaction,
 } from "./persistence-prisma.js";
 import { loadPrismaGatewayState } from "./persistence-prisma-read.js";
@@ -100,6 +103,49 @@ test("persists financial records and webhook idempotency through Prisma", { skip
     assert.equal(getTransaction(transactionId)?.state, "policy_authorized");
     assert.equal(getTimeline(transactionId).some((event) => event.id === auditId), true);
 
+    const growthRunId = `it_gar_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
+    const growthCreatedAt = new Date().toISOString();
+    const growthRun = {
+      id: growthRunId,
+      objective: "Increase basket value for test campaign",
+      campaignId: "it-growth-campaign",
+      maxSpendPaise: 800000,
+      maxSteps: 8,
+      state: "EVALUATING",
+      stepCount: 1,
+      plannerCalls: 1,
+      plannerModel: "test-planner",
+      selectedOpportunity: { sourceProductId: "hp-001", targetProductId: "case-001", score: 0.91 },
+      preparedOffer: undefined,
+      trace: [],
+      createdAt: growthCreatedAt,
+      updatedAt: growthCreatedAt,
+    };
+    const growthStep = {
+      step: 1,
+      state: "EVALUATING",
+      tool: "inspect_inventory",
+      reason: "Verify current inventory",
+      status: "succeeded",
+      input: { campaignId: "it-growth-campaign" },
+      output: { source: { productId: "hp-001", inventory: 4 } },
+      callId: "call-test-1",
+      plannerModel: "test-planner",
+      startedAt: growthCreatedAt,
+      completedAt: growthCreatedAt,
+      durationMs: 2,
+    };
+    growthRun.trace = [growthStep];
+    await saveGrowthAgentCheckpoint({ run: growthRun, step: growthStep });
+    const restoredGrowthRun = await loadGrowthAgentRun(growthRunId);
+    assert.ok(restoredGrowthRun);
+    assert.equal(restoredGrowthRun.id, growthRunId);
+    assert.equal(restoredGrowthRun.state, "EVALUATING");
+    assert.equal(restoredGrowthRun.plannerCalls, 1);
+    assert.equal(restoredGrowthRun.trace.length, 1);
+    assert.equal(restoredGrowthRun.trace[0]?.tool, "inspect_inventory");
+    assert.equal(restoredGrowthRun.trace[0]?.callId, "call-test-1");
+
     assert.equal(await claimWebhookEvent({ dedupeKey: webhookKey, eventName: "payment.captured" }), true);
     assert.equal(await claimWebhookEvent({ dedupeKey: webhookKey, eventName: "payment.captured" }), false);
 
@@ -109,12 +155,17 @@ test("persists financial records and webhook idempotency through Prisma", { skip
     await releaseWebhookEvent(webhookKey);
     assert.equal(await prisma.webhookEvent.findUnique({ where: { dedupeKey: webhookKey } }), null);
     assert.equal(await claimWebhookEvent({ dedupeKey: webhookKey, eventName: "payment.captured" }), true);
+
+    await deleteGrowthAgentRun(growthRunId);
+    assert.equal(await loadGrowthAgentRun(growthRunId), undefined);
   } finally {
     hydrateTransactionStore({ transactions: [], auditEvents: [] });
     await prisma.webhookEvent.deleteMany({ where: { dedupeKey: webhookKey } });
     await prisma.auditEvent.deleteMany({ where: { id: auditId } });
     await prisma.campaignPaymentEvidence.deleteMany({ where: { evidenceId } });
     await prisma.transaction.deleteMany({ where: { id: transactionId } });
+    await prisma.growthAgentStep.deleteMany({ where: { runId: { startsWith: "it_gar_" } } });
+    await prisma.growthAgentRun.deleteMany({ where: { id: { startsWith: "it_gar_" } } });
     await closePersistence();
     await closePrisma();
   }
