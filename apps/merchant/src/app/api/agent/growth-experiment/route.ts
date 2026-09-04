@@ -203,7 +203,24 @@ export async function POST(request: Request) {
     const requestedIds = [...treatmentIds, ...controlIds];
     if (new Set(requestedIds).size !== requestedIds.length) return NextResponse.json({ error: "EXPERIMENT_TRANSACTION_CANNOT_BE_IN_BOTH_COHORTS" }, { status: 409 });
     for (const id of requestedIds) {
-      if (!allCandidates.has(id)) return NextResponse.json({ error: "EXPERIMENT_TRANSACTION_NOT_ELIGIBLE" , transactionId: id }, { status: 409 });
+      if (!allCandidates.has(id)) return NextResponse.json({ error: "EXPERIMENT_TRANSACTION_NOT_ELIGIBLE", transactionId: id }, { status: 409 });
+    }
+
+    const treatmentSourceCounts = new Map<string, number>();
+    const controlSourceCounts = new Map<string, number>();
+    for (const id of treatmentIds) {
+      const source = allCandidates.get(id)!.sourceProductId;
+      treatmentSourceCounts.set(source, (treatmentSourceCounts.get(source) ?? 0) + 1);
+    }
+    for (const id of controlIds) {
+      const source = allCandidates.get(id)!.sourceProductId;
+      controlSourceCounts.set(source, (controlSourceCounts.get(source) ?? 0) + 1);
+    }
+    const sourceIds = new Set([...treatmentSourceCounts.keys(), ...controlSourceCounts.keys()]);
+    for (const sourceProductId of sourceIds) {
+      if ((treatmentSourceCounts.get(sourceProductId) ?? 0) !== (controlSourceCounts.get(sourceProductId) ?? 0)) {
+        return NextResponse.json({ error: "EXPERIMENT_SOURCE_MIX_MISMATCH", sourceProductId, treatmentCount: treatmentSourceCounts.get(sourceProductId) ?? 0, controlCount: controlSourceCounts.get(sourceProductId) ?? 0 }, { status: 409 });
+      }
     }
 
     const existingAssignments = await getGrowthExperimentAssignmentsByTransactionIds(requestedIds);
