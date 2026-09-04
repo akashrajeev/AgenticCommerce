@@ -48,7 +48,9 @@ test("model-directed buyer loop reaches approval with explicit product selection
     assert.equal(execution.workspace.selectedProductId, "hp-002");
     assert.equal(execution.workspace.latestQuote?.totalPaise, 579900);
     assert.equal(execution.workspace.basket[0]?.productId, "hp-002");
-    assert.match(String(execution.trace.find((step) => step.tool === "select_product")?.output), /SELECTED/);
+    const selectionStep = execution.trace.find((step) => step.tool === "select_product");
+    assert.equal(selectionStep?.status, "succeeded");
+    assert.equal((selectionStep?.output as { status?: string } | undefined)?.status, "SELECTED");
   } finally { restore(); }
 });
 
