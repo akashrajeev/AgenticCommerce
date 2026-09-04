@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { getGrowthExperiment, listGrowthExperimentAssignments } from "../../../../../lib/growth-experiment-persistence";
+import {
+  createOrUpdateGrowthExperimentExecution,
+  getGrowthExperiment,
+  listGrowthExperimentAssignments,
+  listGrowthExperimentExecutions,
+  type GrowthExperimentExecution,
+} from "../../../../../lib/growth-experiment-persistence";
 
 export const dynamic = "force-dynamic";
 
@@ -79,12 +85,45 @@ export async function GET(request: Request) {
       const orderId = typeof merchantOrder?.razorpayOrderId === "string" ? merchantOrder.razorpayOrderId : typeof transaction?.razorpayOrderId === "string" ? transaction.razorpayOrderId : "";
       const paymentId = typeof merchantOrder?.razorpayPaymentId === "string" ? merchantOrder.razorpayPaymentId : typeof transaction?.razorpayPaymentId === "string" ? transaction.razorpayPaymentId : "";
       const verified = await verify(assignment.transactionId, orderId, paymentId);
-      if (!verified) return { assignment, verified: false };
-      const amountPaise = typeof merchantOrder?.amountPaise === "number" ? merchantOrder.amountPaise : typeof record(transaction?.quote)?.totalPaise === "number" ? Number(record(transaction?.quote)?.totalPaise) : 0;
-      const baseAmountPaise = typeof merchantOrder?.baseAmountPaise === "number" ? merchantOrder.baseAmountPaise : amountPaise;
-      const incrementalRevenuePaise = typeof merchantOrder?.incrementalRevenuePaise === "number" ? merchantOrder.incrementalRevenuePaise : Math.max(amountPaise - baseAmountPaise, 0);
-      verifiedOrders.push({ transactionId: assignment.transactionId, cohort: assignment.cohort, sourceProductId: assignment.sourceProductId, ...(assignment.targetProductId ? { targetProductId: assignment.targetProductId } : {}), orderId, paymentId, amountPaise, baseAmountPaise, incrementalRevenuePaise });
-      return { assignment, verified: true };
+      const existingExecution = await getExecutionSafe(experimentId, assignment.transactionId);
+      const now = new Date().toISOString();
+      if (verified) {
+        const amountPaise = typeof merchantOrder?.amountPaise === "number" ? merchantOrder.amountPaise : typeof record(transaction?.quote)?.totalPaise === "number" ? Number(record(transaction?.quote)?.totalPaise) : 0;
+        const baseAmountPaise = typeof merchantOrder?.baseAmountPaise === "number" ? merchantOrder.baseAmountPaise : amountPaise;
+        const incrementalRevenuePaise = typeof merchantOrder?.incrementalRevenuePaise === "number" ? merchantOrder.incrementalRevenuePaise : Math.max(amountPaise - baseAmountPaise, 0);
+        verifiedOrders.push({ transactionId: assignment.transactionId, cohort: assignment.cohort, sourceProductId: assignment.sourceProductId, ...(assignment.targetProductId ? { targetProductId: assignment.targetProductId } : {}), orderId, paymentId, amountPaise, baseAmountPaise, incrementalRevenuePaise });
+        await createOrUpdateGrowthExperimentExecution({
+          experimentId,
+          transactionId: assignment.transactionId,
+          cohort: assignment.cohort,
+          status: "CONFIRMED",
+          attempt: existingExecution?.attempt ?? 0,
+          razorpayOrderId: orderId,
+          razorpayPaymentId: paymentId,
+          startedAt: existingExecution?.startedAt ?? now,
+          updatedAt: now,
+        });
+        return { assignment, verified: true, status: "CONFIRMED" };
+      }
+
+      const transactionState = typeof transaction?.state === "string" ? transaction.state : "";
+      if (transactionState === "payment_failed" || transactionState === "cancelled") {
+        await createOrUpdateGrowthExperimentExecution({
+          experimentId,
+          transactionId: assignment.transactionId,
+          cohort: assignment.cohort,
+          status: "RECOVERY_READY",
+          attempt: existingExecution?.attempt ?? 0,
+          ...(orderId ? { razorpayOrderId: orderId } : {}),
+          ...(paymentId ? { razorpayPaymentId: paymentId } : {}),
+          lastError: transactionState === "payment_failed" ? "UNDERLYING_PAYMENT_FAILED_REQUIRES_FRESH_TRANSACTION" : "UNDERLYING_TRANSACTION_CANCELLED_REQUIRES_FRESH_TRANSACTION",
+          startedAt: existingExecution?.startedAt ?? now,
+          updatedAt: now,
+        });
+        return { assignment, verified: false, status: "RECOVERY_READY" };
+      }
+
+      return { assignment, verified: false, status: existingExecution?.status ?? "PAYMENT_PENDING" };
     }));
 
     const treatment = verifiedOrders.filter((order) => order.cohort === "treatment");
@@ -95,12 +134,14 @@ export async function GET(request: Request) {
     const controlAov = control.length ? controlAmount / control.length : null;
     const observedAovUpliftPercent = treatmentAov !== null && controlAov && controlAov > 0 ? ((treatmentAov - controlAov) / controlAov) * 100 : null;
     const incrementalRevenuePerTreatmentOrder = treatment.length ? treatment.reduce((sum, order) => sum + order.incrementalRevenuePaise, 0) / treatment.length : null;
+    const executions = await listGrowthExperimentExecutions(experimentId);
 
     return NextResponse.json({
       testModeOnly: true,
       independentlyVerified: true,
       experiment,
       assignments,
+      executions,
       checks,
       verifiedOrders,
       metrics: {
@@ -121,5 +162,14 @@ export async function GET(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "GROWTH_EXPERIMENT_EVIDENCE_FAILED";
     return NextResponse.json({ error: message, testModeOnly: true }, { status: message === "GROWTH_EXPERIMENT_PERSISTENCE_NOT_CONFIGURED" ? 503 : 502 });
+  }
+}
+
+async function getExecutionSafe(experimentId: string, transactionId: string): Promise<GrowthExperimentExecution | undefined> {
+  try {
+    const { getGrowthExperimentExecution } = await import("../../../../../lib/growth-experiment-persistence");
+    return await getGrowthExperimentExecution(experimentId, transactionId);
+  } catch {
+    return undefined;
   }
 }
