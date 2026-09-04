@@ -87,3 +87,18 @@ model NegotiationAcceptance {
   @@index([negotiationId, mandateId])
   @@map("negotiation_acceptances")
 }
+
+model CampaignPaymentEvidence {
+  evidenceId      String   @id @map("evidence_id")
+  campaignId      String   @map("campaign_id")
+  transactionId   String   @unique @map("transaction_id")
+  razorpayOrderId String   @map("razorpay_order_id")
+  razorpayPaymentId String @map("razorpay_payment_id")
+  amountPaise     BigInt   @map("amount_paise")
+  currency        String
+  orderNotes      Json?
+  verifiedAt      DateTime @map("verified_at")
+
+  @@index([campaignId, verifiedAt])
+  @@map("campaign_payment_evidence")
+}
