@@ -140,3 +140,46 @@ CREATE INDEX IF NOT EXISTS delegated_mandates_subject_idx
 
 CREATE INDEX IF NOT EXISTS delegated_executions_mandate_idx
   ON delegated_mandate_executions(mandate_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS growth_agent_runs (
+  id TEXT PRIMARY KEY,
+  objective TEXT NOT NULL,
+  campaign_id TEXT NOT NULL,
+  max_spend_paise BIGINT,
+  max_steps INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  step_count INTEGER NOT NULL,
+  planner_calls INTEGER NOT NULL,
+  planner_model TEXT,
+  last_planner_error TEXT,
+  selected_opportunity JSONB,
+  prepared_offer JSONB,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS growth_agent_runs_campaign_created_idx
+  ON growth_agent_runs(campaign_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS growth_agent_steps (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES growth_agent_runs(id) ON DELETE CASCADE,
+  step INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL,
+  input JSONB NOT NULL,
+  output JSONB,
+  error TEXT,
+  call_id TEXT,
+  planner_model TEXT,
+  started_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  duration_ms INTEGER,
+  CONSTRAINT growth_agent_steps_run_step_key UNIQUE (run_id, step)
+);
+
+CREATE INDEX IF NOT EXISTS growth_agent_steps_run_started_idx
+  ON growth_agent_steps(run_id, started_at);
