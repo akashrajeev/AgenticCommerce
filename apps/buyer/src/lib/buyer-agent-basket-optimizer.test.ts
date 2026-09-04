@@ -49,7 +49,7 @@ test("compares base and recommendation bundles using fresh quotes", async () => 
   const restore = installFetch();
   try {
     const ctx = context();
-    const result = await executeBuyerAgentBasketOptimizerTool(ctx, { merchantInternalUrl: "http://merchant.test" }, { recommendationProductIds: ["case-001", "dock-001"] });
+    const result = await executeBuyerAgentBasketOptimizerTool({ ...ctx, merchantInternalUrl: "http://merchant.test" }, { recommendationProductIds: ["case-001", "dock-001"] });
     assert.equal(result.tool, "optimize_basket");
     assert.equal(result.result.options.length, 3);
     assert.equal(result.result.recommendedOptionId, "with-case-001");
@@ -62,7 +62,7 @@ test("marks an add-on ineligible when the fresh bundle quote exceeds the immutab
   const restore = installFetch();
   try {
     const ctx = context(650000);
-    const result = await executeBuyerAgentBasketOptimizerTool(ctx, { merchantInternalUrl: "http://merchant.test" }, { recommendationProductIds: ["case-001"] });
+    const result = await executeBuyerAgentBasketOptimizerTool({ ...ctx, merchantInternalUrl: "http://merchant.test" }, { recommendationProductIds: ["case-001"] });
     const option = result.result.options.find((candidate) => candidate.optionId === "with-case-001");
     assert.equal(option?.eligible, false);
     assert.equal(result.result.recommendedOptionId, "base");
