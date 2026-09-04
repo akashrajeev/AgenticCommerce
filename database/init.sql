@@ -71,6 +71,21 @@ CREATE TABLE IF NOT EXISTS negotiation_acceptances (
 CREATE INDEX IF NOT EXISTS negotiation_acceptances_lookup_idx
   ON negotiation_acceptances(negotiation_id, mandate_id);
 
+CREATE TABLE IF NOT EXISTS campaign_payment_evidence (
+  evidence_id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  transaction_id TEXT NOT NULL UNIQUE,
+  razorpay_order_id TEXT NOT NULL,
+  razorpay_payment_id TEXT NOT NULL,
+  amount_paise BIGINT NOT NULL,
+  currency TEXT NOT NULL,
+  order_notes JSONB,
+  verified_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS campaign_payment_evidence_campaign_verified_idx
+  ON campaign_payment_evidence(campaign_id, verified_at DESC);
+
 CREATE TABLE IF NOT EXISTS merchant_orders (
   merchant_order_id TEXT PRIMARY KEY,
   transaction_id TEXT NOT NULL UNIQUE,
