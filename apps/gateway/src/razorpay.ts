@@ -31,6 +31,8 @@ export type RazorpayPayment = {
 
 type RazorpayError = { error?: { code?: string; description?: string } };
 
+type RazorpayCollection = { entity?: string; count?: number; items?: unknown[] };
+
 export function isRazorpayTestMode(): boolean {
   return Boolean(config.razorpayKeyId && config.razorpayKeyId.startsWith("rzp_test_"));
 }
@@ -62,6 +64,11 @@ async function razorpayRequest<T>(path: string, init: RequestInit = {}): Promise
     throw new Error(`RAZORPAY_${error?.error?.code ?? response.status}:${error?.error?.description ?? "request failed"}`);
   }
   return body as T;
+}
+
+export async function probeTestModeCredentials(): Promise<{ testMode: true; reachable: true; endpoint: "/payments?count=1"; objectCount: number }> {
+  const body = await razorpayRequest<RazorpayCollection>("/payments?count=1");
+  return { testMode: true, reachable: true, endpoint: "/payments?count=1", objectCount: typeof body.count === "number" ? body.count : Array.isArray(body.items) ? body.items.length : 0 };
 }
 
 export type RazorpayOrderContext = {
