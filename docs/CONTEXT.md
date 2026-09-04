@@ -20,7 +20,7 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Agent -> Merchant Quote/Off
 
 For growth:
 
-Base Product -> Merchant Recommendation -> Live Bundle Quote -> Buyer/User Approval -> Same MANDATE Policy -> Transaction Authority
+Merchant Campaign -> Growth Agent -> Live Opportunities -> Inventory -> Fresh Offer -> Buyer/User Approval -> Same MANDATE Policy -> Transaction Authority -> Razorpay Test Mode -> Verified Campaign Attribution
 
 ## Trust Zones
 1. AI / probabilistic: reads merchant data and proposes/ranks purchases. It cannot authorize payment or expand authority.
@@ -33,6 +33,7 @@ Base Product -> Merchant Recommendation -> Live Bundle Quote -> Buyer/User Appro
 - ACP client -> Razorpay = FORBIDDEN.
 - Buyer agent -> Razorpay = FORBIDDEN.
 - Merchant agent -> Razorpay = FORBIDDEN.
+- Growth agent -> payment authority = FORBIDDEN.
 - Frontend -> PAID = FORBIDDEN.
 - Unverified payment -> confirmed order = FORBIDDEN.
 - Policy BLOCK -> Razorpay order = FORBIDDEN.
@@ -52,6 +53,9 @@ Base Product -> Merchant Recommendation -> Live Bundle Quote -> Buyer/User Appro
 - A changed negotiation payload under the same acceptance key is rejected as an idempotency conflict.
 - Growth recommendations cannot directly authorize or create payment orders.
 - Growth baskets are freshly quoted and pass through the same deterministic gateway policy as normal purchases.
+- Growth agent tool names are allow-listed; an unregistered function call fails closed before tool execution.
+- Growth agent planner steps are hard-bounded by `maxSteps`.
+- Growth agent uses application-owned bounded planner history with OpenAI `store: false`.
 
 ## Implemented
 
@@ -74,6 +78,10 @@ Base Product -> Merchant Recommendation -> Live Bundle Quote -> Buyer/User Appro
 - Growth capability and endpoint are published in the merchant manifest.
 - ACP-shaped checkout session create/retrieve/update/complete/cancel endpoints.
 - ACP completion forwards signed mandate authorization to the gateway and returns a Razorpay Test Mode order reference as `ready_for_payment` rather than falsely claiming payment success.
+- Growth Agent Phase B.1: model-directed, one-tool-at-a-time orchestration over a strictly allow-listed merchant growth tool registry.
+- Growth Agent planner uses OpenAI Responses function calling with `store: false`; the application retains bounded planner history locally.
+- Growth Agent records planner model/call IDs on each tool trace step and returns tool failures to the planner for bounded replanning.
+- Growth Agent API at `/api/agent/growth-agent`.
 
 ### Buyer
 - Modern transaction workspace UI.
@@ -125,6 +133,7 @@ Base Product -> Merchant Recommendation -> Live Bundle Quote -> Buyer/User Appro
 - Docker Compose services for PostgreSQL, merchant, buyer and gateway.
 - CI workflow: install, typecheck, unit tests and build.
 - Gateway regression tests cover deterministic policy behavior, Razorpay signature validation, payment recovery, mandate binding/replay, delegated budget/revocation boundaries, merchant offer attestation and negotiation idempotency.
+- Merchant growth-agent tests cover model-selected ordering, recoverable tool failures, hard step budgets and payment-authority exclusion using planner injection without API credentials.
 
 ## Persistence Boundary
 PostgreSQL is the durable gateway backing store when `DATABASE_URL` is configured. Gateway startup hydrates transactions, audit events and delegated mandates/executions into runtime maps.
@@ -150,6 +159,8 @@ Merchant growth opportunity state itself is recomputed from current catalog/reco
 
 Merchant quote and ACP checkout-session stores remain in-memory and separate from gateway durability.
 
+Growth Agent run/trace state is currently in-memory on the merchant app. Phase C must persist agent runs and steps before autonomous campaign execution is connected to measurable Test Mode cohort revenue.
+
 ## Failure Recovery Contract
 - Policy block is terminal and creates no Razorpay order.
 - Payment failure is terminal for that attempt.
@@ -163,6 +174,7 @@ Merchant quote and ACP checkout-session stores remain in-memory and separate fro
 - A merchant offer amount/item/merchant/quote change is rejected before delegated authorization.
 - Reusing an acceptance key with a different offer payload returns an idempotency conflict and does not create another transaction.
 - Growth approval re-fetches a live bundle quote before creating the gateway transaction intent.
+- Growth agent tool failures are surfaced to the planner, but planner/tool execution is still bounded by `maxSteps` and allow-listed tool names.
 
 ## ACP / Phase 4 Flow
 ACP client
@@ -340,6 +352,39 @@ ALLOWED or BLOCKED
 
 The growth layer does not claim a trained uplift model. Recommendations remain deterministic catalog intelligence. The financial control boundary remains unchanged.
 
+## Phase B.1 Agent-Directed Growth Loop
+
+The current merchant growth agent uses the OpenAI Responses API to choose the next tool from the exact server-defined registry:
+
+```text
+Merchant campaign objective
+        ↓
+OpenAI function call
+        ↓
+ALLOWLIST VALIDATION
+        ↓
+execute ONE merchant tool
+        ↓
+trace result
+        ↓
+function_call_output
+        ↓
+OpenAI chooses next tool
+        ↓
+repeat until prepare_offer / failure / maxSteps
+```
+
+Current tools:
+
+```text
+get_campaign
+list_opportunities
+inspect_inventory
+prepare_offer
+```
+
+The planner is explicitly forbidden from payment authority. Any unregistered tool call fails before execution.
+
 ## Current Limitations
 - Merchant negotiation state, merchant quote state and ACP checkout-session persistence are still in-memory.
 - Delegated mandate creation/revocation is currently a demo-facing trusted control endpoint; a production deployment needs authenticated user/session identity and stronger multi-tenant authorization.
@@ -351,6 +396,7 @@ The growth layer does not claim a trained uplift model. Recommendations remain d
 - Buyer UI should refresh/poll after webhook-only payment state changes.
 - Full ACP wire conformance is not claimed.
 - AP2 wire interoperability is not claimed.
+- Growth Agent runs and traces are not yet durable; they remain merchant-process memory until Phase C persistence.
 
 ## Next Step
-Phase 8: production hardening — authenticated multi-tenant mandate management, persistent negotiation sessions/offer attestations, signed merchant-agent credentials, and a repeatable public-webhook Test Mode demo harness.
+Phase C: persist Growth Agent runs/steps and wire `prepare_offer` into buyer offer delivery, explicit approval, fresh quote revalidation and the existing MANDATE authorization path. Then execute a real Test Mode campaign cohort and calculate realized uplift only from independently verified Razorpay Test Mode payments.
