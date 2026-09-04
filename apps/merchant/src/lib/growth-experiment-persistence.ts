@@ -81,6 +81,13 @@ export async function createGrowthExperiment(experiment: GrowthExperiment): Prom
   return experiment;
 }
 
+export async function deleteGrowthExperiment(experimentId: string): Promise<void> {
+  const sql = getClient();
+  if (!sql) return;
+  await ensureSchema();
+  await sql`DELETE FROM growth_experiments WHERE experiment_id = ${experimentId}`;
+}
+
 export async function assignGrowthExperimentMembers(assignments: GrowthExperimentAssignment[]): Promise<void> {
   if (!assignments.length) return;
   const sql = getClient();
