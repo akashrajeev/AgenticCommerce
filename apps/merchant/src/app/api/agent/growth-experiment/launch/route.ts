@@ -135,6 +135,10 @@ export async function POST(request: Request) {
     const results = [];
     for (const assignment of assignments.filter((item) => requestedCohorts.has(item.cohort))) {
       const existingExecution = await getGrowthExperimentExecution(experimentId, assignment.transactionId);
+      if (existingExecution && ["ORDER_CREATED", "PAYMENT_PENDING", "CONFIRMED"].includes(existingExecution.status) && existingExecution.razorpayOrderId) {
+        results.push({ ...assignment, ok: true, recovered: true, idempotent: true, execution: existingExecution, orderId: existingExecution.razorpayOrderId });
+        continue;
+      }
       const transaction = byId.get(assignment.transactionId);
       const candidate = transaction ? candidateForAssignment(transaction, assignment) : null;
 
@@ -209,7 +213,7 @@ export async function POST(request: Request) {
       await createOrUpdateGrowthExperimentExecution(executionReady);
       results.push({ ...paymentOrder, execution: executionReady });
     }
-    return NextResponse.json({ testModeOnly: true, experiment, campaignId: campaign.id, requestedCohorts: [...requestedCohorts], results, recovery: "Re-run launch safely retries failed order-preparation attempts or returns existing payment-ready execution records; payment failures remain terminal at the underlying transaction and require a fresh transaction/authorization." }, { headers: { "cache-control": "no-store" } });
+    return NextResponse.json({ testModeOnly: true, experiment, campaignId: campaign.id, requestedCohorts: [...requestedCohorts], results, recovery: "Re-run launch is idempotent for payment-ready execution records; payment failures remain terminal at the underlying transaction and require a fresh transaction/authorization." }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "GROWTH_EXPERIMENT_LAUNCH_FAILED";
     return NextResponse.json({ error: message, testModeOnly: true }, { status: message === "GROWTH_EXPERIMENT_PERSISTENCE_NOT_CONFIGURED" ? 503 : 422 });
