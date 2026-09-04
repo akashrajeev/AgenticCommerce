@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCampaignOpportunities, growthCampaigns, type GrowthCampaign } from "../../../lib/campaigns";
+import { getCampaignOpportunities, growthCampaigns, type CampaignOpportunity, type GrowthCampaign } from "../../../lib/campaigns";
 
 const GATEWAY_INTERNAL_URL = (process.env.GATEWAY_INTERNAL_URL ?? "http://localhost:4000").replace(/\/$/, "");
 const MCP_INTERNAL_URL = (process.env.MCP_INTERNAL_URL ?? "http://localhost:4100").replace(/\/$/, "");
@@ -15,6 +15,7 @@ type MerchantTransaction = {
   state: string;
   razorpayOrderId: string | null;
   razorpayPaymentId: string | null;
+  matchedOpportunity?: { sourceProductId: string; targetProductId: string };
 };
 
 type MerchantOrder = {
@@ -65,14 +66,36 @@ function campaignPayload(campaign: GrowthCampaign) {
   };
 }
 
-function transactionPayload(transaction: Transaction, allowedProductIds: Set<string>): MerchantTransaction | null {
+function lineItemProductIds(transaction: Transaction): string[] {
+  const intent = asRecord(transaction.intent);
+  const rawLineItems = Array.isArray(intent?.lineItems) ? intent.lineItems : [];
+  return rawLineItems
+    .map((item) => asRecord(item)?.productId)
+    .filter((value): value is string => typeof value === "string");
+}
+
+function matchedCampaignOpportunity(transaction: Transaction, opportunities: CampaignOpportunity[]): CampaignOpportunity | undefined {
+  const intent = asRecord(transaction.intent);
+  const productId = typeof transaction.productId === "string" ? transaction.productId : typeof intent?.productId === "string" ? intent.productId : null;
+  if (!productId) return undefined;
+  const lineProducts = new Set(lineItemProductIds(transaction));
+  return opportunities.find((opportunity) => {
+    if (opportunity.type === "CROSS_SELL") {
+      return productId === opportunity.sourceProductId && lineProducts.has(opportunity.productId);
+    }
+    return productId === opportunity.productId && (lineProducts.size === 0 || lineProducts.has(opportunity.productId));
+  });
+}
+
+function transactionPayload(transaction: Transaction, opportunities: CampaignOpportunity[]): MerchantTransaction | null {
   const authorization = asRecord(transaction.mandateAuthorization);
   const intent = asRecord(transaction.intent);
   const quote = asRecord(transaction.quote);
   const productId = typeof transaction.productId === "string"
     ? transaction.productId
     : typeof intent?.productId === "string" ? intent.productId : null;
-  if (transaction.state !== "policy_authorized" || authorization?.status !== "authorized" || typeof authorization.authorizationId !== "string" || !productId || !allowedProductIds.has(productId)) return null;
+  const matched = matchedCampaignOpportunity(transaction, opportunities);
+  if (transaction.state !== "policy_authorized" || authorization?.status !== "authorized" || typeof authorization.authorizationId !== "string" || !matched) return null;
   return {
     transactionId: String(transaction.id),
     authorizationId: String(authorization.authorizationId),
@@ -81,6 +104,7 @@ function transactionPayload(transaction: Transaction, allowedProductIds: Set<str
     state: String(transaction.state),
     razorpayOrderId: typeof transaction.razorpayOrderId === "string" ? transaction.razorpayOrderId : null,
     razorpayPaymentId: typeof transaction.razorpayPaymentId === "string" ? transaction.razorpayPaymentId : null,
+    matchedOpportunity: { sourceProductId: matched.sourceProductId, targetProductId: matched.productId },
   };
 }
 
@@ -185,10 +209,9 @@ export async function GET(request: Request) {
     const campaign = growthCampaigns.find((item) => item.id === requestedCampaignId) ?? growthCampaigns[0];
     if (!campaign) return NextResponse.json({ error: "NO_GROWTH_CAMPAIGNS" }, { status: 404 });
     const opportunities = getCampaignOpportunities(campaign);
-    const allowedProductIds = new Set(opportunities.map((opportunity) => opportunity.productId));
     const body = await gatewayJson("/v1/transactions");
     const raw = Array.isArray(body.transactions) ? body.transactions : [];
-    const candidates = raw.map((value) => asRecord(value)).filter((value): value is Transaction => value !== null).map((transaction) => transactionPayload(transaction, allowedProductIds)).filter((value): value is MerchantTransaction => value !== null).slice(0, 12);
+    const candidates = raw.map((value) => asRecord(value)).filter((value): value is Transaction => value !== null).map((transaction) => transactionPayload(transaction, opportunities)).filter((value): value is MerchantTransaction => value !== null).slice(0, 12);
     const funnel = await buildFunnel(campaign, candidates);
     return NextResponse.json({
       testModeOnly: true,
@@ -197,7 +220,7 @@ export async function GET(request: Request) {
       candidates,
       funnel,
       maxBatchSize: 5,
-      executionRule: "Only existing MANDATE-authorized transactions matching the selected campaign opportunity can create Razorpay Test Mode orders.",
+      executionRule: "Only existing MANDATE-authorized transactions matching the selected campaign source/target opportunity can create Razorpay Test Mode orders.",
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "CAMPAIGN_ORCHESTRATOR_UNAVAILABLE" }, { status: 502 });
@@ -212,11 +235,10 @@ export async function POST(request: Request) {
   const campaign = growthCampaigns.find((item) => item.id === campaignId);
   if (!campaign) return NextResponse.json({ error: "CAMPAIGN_NOT_FOUND" }, { status: 404 });
   const opportunities = getCampaignOpportunities(campaign);
-  const allowedProductIds = new Set(opportunities.map((opportunity) => opportunity.productId));
   const body = await gatewayJson("/v1/transactions");
   const raw = Array.isArray(body.transactions) ? body.transactions : [];
   const selected = transactionIds.map((id) => raw.map((value) => asRecord(value)).find((transaction) => transaction?.id === id)).filter((value): value is Transaction => value !== undefined && value !== null);
-  const candidates = selected.map((transaction) => transactionPayload(transaction, allowedProductIds)).filter((value): value is MerchantTransaction => value !== null);
+  const candidates = selected.map((transaction) => transactionPayload(transaction, opportunities)).filter((value): value is MerchantTransaction => value !== null);
   if (candidates.length !== transactionIds.length) return NextResponse.json({ error: "CAMPAIGN_TRANSACTION_NOT_ELIGIBLE" }, { status: 409 });
 
   const results = [] as Array<Record<string, unknown>>;
@@ -224,5 +246,5 @@ export async function POST(request: Request) {
     const result = await createTestOrder(candidate.authorizationId, candidate.transactionId, campaign.id);
     results.push({ ...candidate, ...result });
   }
-  return NextResponse.json({ testModeOnly: true, campaignId, requested: transactionIds.length, results, next: "Complete the Razorpay Test Mode Checkout for each created order, then open /growth for independently verified uplift." });
+  return NextResponse.json({ testModeOnly: true, campaignId, requested: transactionIds.length, results, next: "Complete the Razorpay Test Mode Checkout for each created order, then open /growth or /growth-attribution for independently verified uplift." });
 }
