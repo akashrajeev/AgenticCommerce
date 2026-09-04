@@ -11,6 +11,7 @@ type BuyerAgentRunSnapshot = {
   plannerCalls: number;
   plannerModel?: string;
   lastError?: string;
+  workspace?: unknown;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -59,10 +60,12 @@ async function ensureSchema(): Promise<void> {
         planner_calls INTEGER NOT NULL,
         planner_model TEXT,
         last_error TEXT,
+        workspace JSONB,
         created_at TIMESTAMPTZ NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL,
         completed_at TIMESTAMPTZ
       );
+      ALTER TABLE buyer_agent_runs ADD COLUMN IF NOT EXISTS workspace JSONB;
       CREATE TABLE IF NOT EXISTS buyer_agent_steps (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES buyer_agent_runs(id) ON DELETE CASCADE,
@@ -112,10 +115,10 @@ export async function persistBuyerAgentCheckpoint(run: BuyerAgentRunSnapshot, st
     await tx`
       INSERT INTO buyer_agent_runs (
         id, objective, max_spend_paise, currency, max_steps, state, step_count, planner_calls,
-        planner_model, last_error, created_at, updated_at, completed_at
+        planner_model, last_error, workspace, created_at, updated_at, completed_at
       ) VALUES (
         ${run.id}, ${run.objective}, ${run.maxSpendPaise}, ${run.currency}, ${run.maxSteps}, ${run.state}, ${run.stepCount}, ${run.plannerCalls},
-        ${run.plannerModel ?? null}, ${run.lastError ?? null}, ${run.createdAt}, ${run.updatedAt}, ${run.completedAt ?? null}
+        ${run.plannerModel ?? null}, ${run.lastError ?? null}, ${json(run.workspace)}, ${run.createdAt}, ${run.updatedAt}, ${run.completedAt ?? null}
       )
       ON CONFLICT (id) DO UPDATE SET
         objective = EXCLUDED.objective,
@@ -127,6 +130,7 @@ export async function persistBuyerAgentCheckpoint(run: BuyerAgentRunSnapshot, st
         planner_calls = EXCLUDED.planner_calls,
         planner_model = EXCLUDED.planner_model,
         last_error = EXCLUDED.last_error,
+        workspace = EXCLUDED.workspace,
         updated_at = EXCLUDED.updated_at,
         completed_at = EXCLUDED.completed_at
     `;
@@ -157,7 +161,7 @@ export async function persistBuyerAgentCheckpoint(run: BuyerAgentRunSnapshot, st
   });
 }
 
-export async function loadBuyerAgentRun(runId: string): Promise<{ run: BuyerAgentRunSnapshot; trace: BuyerAgentTraceStep[] } | undefined> {
+export async function loadBuyerAgentRun(runId: string): Promise<{ run: BuyerAgentRunSnapshot; workspace?: unknown; trace: BuyerAgentTraceStep[] } | undefined> {
   const sql = getClient();
   if (!sql) return undefined;
   await ensureSchema();
@@ -170,6 +174,7 @@ export async function loadBuyerAgentRun(runId: string): Promise<{ run: BuyerAgen
     maxSteps: Number(row.max_steps), state: String(row.state), stepCount: Number(row.step_count), plannerCalls: Number(row.planner_calls),
     plannerModel: typeof row.planner_model === "string" ? row.planner_model : undefined,
     lastError: typeof row.last_error === "string" ? row.last_error : undefined,
+    workspace: row.workspace === null ? undefined : parseJson(row.workspace),
     createdAt: new Date(String(row.created_at)).toISOString(), updatedAt: new Date(String(row.updated_at)).toISOString(),
     completedAt: row.completed_at === null ? undefined : new Date(String(row.completed_at)).toISOString(),
   };
@@ -181,5 +186,5 @@ export async function loadBuyerAgentRun(runId: string): Promise<{ run: BuyerAgen
     startedAt: new Date(String(step.started_at)).toISOString(), completedAt: step.completed_at === null ? undefined : new Date(String(step.completed_at)).toISOString(),
     durationMs: step.duration_ms === null ? undefined : Number(step.duration_ms),
   }));
-  return { run, trace };
+  return { run, workspace: run.workspace, trace };
 }
