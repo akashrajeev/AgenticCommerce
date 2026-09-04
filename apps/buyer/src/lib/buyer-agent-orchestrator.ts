@@ -57,6 +57,17 @@ const MAX_HISTORY_ITEMS = 32;
 const histories = new Map<string, unknown[]>();
 const traces = new Map<string, BuyerAgentTraceStep[]>();
 
+const BUYER_AGENT_MODEL_TOOLS = BUYER_AGENT_TOOLS.map((tool) => {
+  if (tool.name !== "search_products") return tool;
+  return {
+    ...tool,
+    parameters: {
+      ...tool.parameters,
+      required: ["query", "category", "maxPricePaise", "inStockOnly"],
+    },
+  };
+});
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -181,18 +192,19 @@ export async function runBuyerAgent(options: {
         plannerModel = plan.model;
         assertAllowedTool(plan.tool);
       } catch (error) {
+        const message = error instanceof Error ? error.message : "BUYER_AGENT_PLANNER_FAILED";
         const step: BuyerAgentTraceStep = {
           step: stepNumber,
           state: run.state,
           tool: "prepare_approval",
           arguments: {},
           status: "failed",
-          error: error instanceof Error ? error.message : "BUYER_AGENT_PLANNER_FAILED",
+          error: message,
           startedAt,
           completedAt: now(),
         };
         trace.push(step);
-        failBuyerAgent(run.id, step.error ?? "BUYER_AGENT_PLANNER_FAILED");
+        failBuyerAgent(run.id, message);
         break;
       }
 
@@ -319,7 +331,7 @@ async function defaultBuyerAgentPlanner(input: Parameters<BuyerAgentPlanner>[0])
         },
         ...input.history,
       ],
-      tools: BUYER_AGENT_TOOLS,
+      tools: BUYER_AGENT_MODEL_TOOLS,
     }),
     cache: "no-store",
     signal: AbortSignal.timeout(20_000),
