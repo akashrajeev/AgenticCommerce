@@ -37,8 +37,10 @@ test("rejects a plan that invents campaign or product identifiers", () => {
 });
 
 test("accepts only an existing merchant opportunity and caps expected value", () => {
-  const campaign = growthCampaigns.find((item) => getCampaignOpportunities(item).length > 0)!;
+  const campaign = growthCampaigns.find((item) => getCampaignOpportunities(item).length > 0);
+  assert.ok(campaign, "expected a configured growth campaign");
   const opportunity = getCampaignOpportunities(campaign)[0];
+  assert.ok(opportunity, "expected at least one configured opportunity");
   const context = buildGrowthAiContext([]);
   const plan = validateGrowthAiPlan({
     campaignId: campaign.id,
@@ -57,8 +59,10 @@ test("accepts only an existing merchant opportunity and caps expected value", ()
 });
 
 test("rejects expected incremental value above the merchant opportunity", () => {
-  const campaign = growthCampaigns.find((item) => getCampaignOpportunities(item).length > 0)!;
+  const campaign = growthCampaigns.find((item) => getCampaignOpportunities(item).length > 0);
+  assert.ok(campaign, "expected a configured growth campaign");
   const opportunity = getCampaignOpportunities(campaign)[0];
+  assert.ok(opportunity, "expected at least one configured opportunity");
   const context = buildGrowthAiContext([]);
   assert.throws(
     () => validateGrowthAiPlan({
