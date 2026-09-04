@@ -101,16 +101,16 @@ export default function MerchantHomePage() {
 
       <section id="operations" className="ops-strip">
         <div>
-          <span className="ops-number">14</span>
-          <span>transactions awaiting review</span>
+          <span className="ops-number">LIVE</span>
+          <span>Growth Agent orchestration</span>
         </div>
         <div>
-          <span className="ops-number">99.8%</span>
-          <span>inventory accuracy</span>
+          <span className="ops-number">BOUND</span>
+          <span>MANDATE financial authority</span>
         </div>
         <div>
-          <span className="ops-number">₹2.4L</span>
-          <span>gross merchandise value</span>
+          <Link href="/judge-growth" className="ops-number" style={{ textDecoration: "none" }}>PROOF →</Link>
+          <span>Test Mode evidence + observed uplift</span>
         </div>
       </section>
 
