@@ -64,7 +64,13 @@ async function razorpayRequest<T>(path: string, init: RequestInit = {}): Promise
   return body as T;
 }
 
-export async function createOrder(transaction: Transaction): Promise<RazorpayOrder> {
+export type RazorpayOrderContext = {
+  campaignId?: string;
+};
+
+export async function createOrder(transaction: Transaction, context: RazorpayOrderContext = {}): Promise<RazorpayOrder> {
+  const campaignId = context.campaignId?.trim();
+  if (campaignId && !/^[a-z0-9][a-z0-9-]{0,39}$/.test(campaignId)) throw new Error("INVALID_GROWTH_CAMPAIGN_ID");
   return razorpayRequest<RazorpayOrder>("/orders", {
     method: "POST",
     body: JSON.stringify({
@@ -75,6 +81,7 @@ export async function createOrder(transaction: Transaction): Promise<RazorpayOrd
         mandate_transaction_id: transaction.id,
         merchant_id: transaction.intent.merchantId,
         product_id: transaction.intent.productId,
+        ...(campaignId ? { growth_campaign_id: campaignId } : {}),
       },
     }),
   });
