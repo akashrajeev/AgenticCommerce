@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBuyerAgentRun } from "../../../../lib/buyer-agent";
-import { getBuyerAgentHistory, getBuyerAgentTrace, runBuyerAgent } from "../../../../lib/buyer-agent-orchestrator";
+import { getBuyerAgentHistory, getBuyerAgentTrace, loadPersistedBuyerAgentRun, runBuyerAgent } from "../../../../lib/buyer-agent-orchestrator";
 
 function parseInput(value: unknown): {
   objective: string;
@@ -48,7 +48,18 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const runId = url.searchParams.get("runId")?.trim();
   if (!runId) return NextResponse.json({ error: "BUYER_AGENT_RUN_ID_REQUIRED" }, { status: 400 });
+
   const run = getBuyerAgentRun(runId);
-  if (!run) return NextResponse.json({ error: "BUYER_AGENT_RUN_NOT_FOUND" }, { status: 404 });
-  return NextResponse.json({ run, trace: getBuyerAgentTrace(runId), historyItems: getBuyerAgentHistory(runId).length }, { headers: { "cache-control": "no-store" } });
+  if (run) {
+    return NextResponse.json({ run, trace: getBuyerAgentTrace(runId), historyItems: getBuyerAgentHistory(runId).length, source: "memory" }, { headers: { "cache-control": "no-store" } });
+  }
+
+  try {
+    const persisted = await loadPersistedBuyerAgentRun(runId);
+    if (persisted) return NextResponse.json({ ...persisted, source: "postgres" }, { headers: { "cache-control": "no-store" } });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "BUYER_AGENT_LOAD_FAILED" }, { status: 503 });
+  }
+
+  return NextResponse.json({ error: "BUYER_AGENT_RUN_NOT_FOUND" }, { status: 404 });
 }
