@@ -20,7 +20,7 @@ User -> Delegated Mandate -> Buyer Agent -> Merchant Agent -> Merchant Quote/Off
 
 For growth:
 
-Merchant Campaign -> Growth Agent -> Live Opportunities -> Inventory -> Fresh Offer -> Buyer/User Approval -> Same MANDATE Policy -> Transaction Authority -> Razorpay Test Mode -> Verified Campaign Attribution
+Merchant Campaign -> Growth Agent -> Live Opportunities -> Inventory -> Fresh Offer -> Persistent Agent Trace -> Buyer/User Approval -> Fresh Merchant Quote -> MANDATE Policy -> Transaction Authority -> Razorpay Test Mode -> Verified Campaign Attribution
 
 ## Trust Zones
 1. AI / probabilistic: reads merchant data and proposes/ranks purchases. It cannot authorize payment or expand authority.
@@ -50,12 +50,13 @@ Merchant Campaign -> Growth Agent -> Live Opportunities -> Inventory -> Fresh Of
 - A delegated agent cannot change its own mandate limits, merchants, products or expiry.
 - Delegated spending is reserved before execution and counted as spent only after authoritative confirmation.
 - An accepted merchant offer must match the merchant-issued negotiation record before a delegated authorization is created.
-- A changed negotiation payload under the same acceptance key is rejected as an idempotency conflict.
 - Growth recommendations cannot directly authorize or create payment orders.
 - Growth baskets are freshly quoted and pass through the same deterministic gateway policy as normal purchases.
 - Growth agent tool names are allow-listed; an unregistered function call fails closed before tool execution.
 - Growth agent planner steps are hard-bounded by `maxSteps`.
 - Growth agent uses application-owned bounded planner history with OpenAI `store: false`.
+- Growth Agent persistence contains run/trace evidence only; it does not confer payment authority.
+- Buyer approval of a Growth Agent offer re-fetches a fresh merchant quote before entering MANDATE.
 
 ## Implemented
 
@@ -82,6 +83,9 @@ Merchant Campaign -> Growth Agent -> Live Opportunities -> Inventory -> Fresh Of
 - Growth Agent planner uses OpenAI Responses function calling with `store: false`; the application retains bounded planner history locally.
 - Growth Agent records planner model/call IDs on each tool trace step and returns tool failures to the planner for bounded replanning.
 - Growth Agent API at `/api/agent/growth-agent`.
+- Growth Agent Phase C: run snapshots and tool steps are durably checkpointed to PostgreSQL with an atomic run/step transaction.
+- Growth Agent API can recover persisted runs after merchant-process restart and merges durable runs with live in-memory runs.
+- Merchant growth-agent persistence tests are isolated from PostgreSQL with an explicit test-only disable flag.
 
 ### Buyer
 - Modern transaction workspace UI.
@@ -95,6 +99,7 @@ Merchant Campaign -> Growth Agent -> Live Opportunities -> Inventory -> Fresh Of
 - Buyer-agent negotiation API at `/api/agent/negotiate`.
 - Negotiation console at `/negotiation` showing intent -> merchant offers -> buyer selection -> gateway acceptance -> Razorpay Test Mode.
 - Growth approval workspace at `/growth` showing recommendations, incremental value, projected basket and budget fit before routing the approved basket to the gateway.
+- Growth workspace can invoke the merchant Growth Agent, display its planner/step trace, adopt its prepared line items, and require explicit buyer approval before fresh quote revalidation and MANDATE routing.
 
 ### Gateway
 - Deterministic policy engine with budget, quantity, inventory, merchant, quote-validity and amount-integrity checks.
@@ -123,6 +128,7 @@ Merchant Campaign -> Growth Agent -> Live Opportunities -> Inventory -> Fresh Of
 - Merchant-issued offer attestation and authoritative quote revalidation before acceptance.
 - Negotiated acceptance is routed into the existing delegated mandate authorization core rather than creating a separate payment authority.
 - Negotiated acceptance replay handling plus idempotency conflict detection.
+- Prisma persistence models and integration coverage for durable Growth Agent run/step evidence.
 
 ### Shared contracts
 - `packages/types` contains normalized commerce, growth, negotiation, mandate, authorization and delegated execution types.
@@ -134,6 +140,7 @@ Merchant Campaign -> Growth Agent -> Live Opportunities -> Inventory -> Fresh Of
 - CI workflow: install, typecheck, unit tests and build.
 - Gateway regression tests cover deterministic policy behavior, Razorpay signature validation, payment recovery, mandate binding/replay, delegated budget/revocation boundaries, merchant offer attestation and negotiation idempotency.
 - Merchant growth-agent tests cover model-selected ordering, recoverable tool failures, hard step budgets and payment-authority exclusion using planner injection without API credentials.
+- Gateway Prisma smoke tests cover transaction/audit/webhook/campaign evidence persistence and Growth Agent run/step durability.
 
 ## Persistence Boundary
 PostgreSQL is the durable gateway backing store when `DATABASE_URL` is configured. Gateway startup hydrates transactions, audit events and delegated mandates/executions into runtime maps.
@@ -149,7 +156,11 @@ webhook_events
 merchant_orders
 delegated_mandates
 delegated_mandate_executions
+growth_agent_runs
+growth_agent_steps
 ```
+
+The Growth Agent execution process also writes its run/step checkpoints to the shared PostgreSQL database. Run and step writes are transactionally grouped so a persisted step is associated with the corresponding run snapshot.
 
 Delegated budget reservations use an atomic SQL update so multiple gateway instances cannot reserve more than the remaining total budget.
 
@@ -159,7 +170,7 @@ Merchant growth opportunity state itself is recomputed from current catalog/reco
 
 Merchant quote and ACP checkout-session stores remain in-memory and separate from gateway durability.
 
-Growth Agent run/trace state is currently in-memory on the merchant app. Phase C must persist agent runs and steps before autonomous campaign execution is connected to measurable Test Mode cohort revenue.
+Growth Agent run/trace state is now durable when `DATABASE_URL` is configured; the merchant keeps an in-memory execution view for the active process and uses PostgreSQL for restart recovery and judge-visible evidence.
 
 ## Failure Recovery Contract
 - Policy block is terminal and creates no Razorpay order.
@@ -175,6 +186,7 @@ Growth Agent run/trace state is currently in-memory on the merchant app. Phase C
 - Reusing an acceptance key with a different offer payload returns an idempotency conflict and does not create another transaction.
 - Growth approval re-fetches a live bundle quote before creating the gateway transaction intent.
 - Growth agent tool failures are surfaced to the planner, but planner/tool execution is still bounded by `maxSteps` and allow-listed tool names.
+- Growth Agent persistence failure fails the growth run closed rather than silently executing an untracked offer.
 
 ## ACP / Phase 4 Flow
 ACP client
@@ -341,6 +353,10 @@ Projected bundle quote
         ↓
 BUDGET FIT
         ↓
+Growth Agent prepares quote-backed offer
+        ↓
+Planner / tool trace is shown
+        ↓
 User clicks “Approve & route through MANDATE”
         ↓
 Fresh merchant quote
@@ -348,6 +364,10 @@ Fresh merchant quote
 Deterministic gateway policy
         ↓
 ALLOWED or BLOCKED
+        ↓
+Razorpay Test Mode
+        ↓
+Independently verified campaign payment evidence
 ```
 
 The growth layer does not claim a trained uplift model. Recommendations remain deterministic catalog intelligence. The financial control boundary remains unchanged.
@@ -385,6 +405,30 @@ prepare_offer
 
 The planner is explicitly forbidden from payment authority. Any unregistered tool call fails before execution.
 
+## Phase C Durable Growth Evidence
+
+The Growth Agent now persists:
+
+```text
+GrowthAgentRun
+  -> objective / campaign / spend bound / state / planner metadata
+  -> selected opportunity
+  -> prepared offer
+
+GrowthAgentStep[]
+  -> step order
+  -> selected tool
+  -> reason
+  -> inputs / outputs
+  -> planner call ID / model
+  -> status / error
+  -> start/end/duration
+```
+
+The merchant growth API can retrieve a persisted run even when the active process no longer has that run in memory. The persistence path fails closed: if checkpointing cannot be completed, the agent run is marked failed rather than continuing with an untracked offer.
+
+The buyer `/growth` workspace can call the Growth Agent, display its actual step trace, and then use the agent-produced line items for the approval flow. Approval still creates a fresh quote before the gateway purchase intent, so the agent never controls the final payment amount.
+
 ## Current Limitations
 - Merchant negotiation state, merchant quote state and ACP checkout-session persistence are still in-memory.
 - Delegated mandate creation/revocation is currently a demo-facing trusted control endpoint; a production deployment needs authenticated user/session identity and stronger multi-tenant authorization.
@@ -396,7 +440,7 @@ The planner is explicitly forbidden from payment authority. Any unregistered too
 - Buyer UI should refresh/poll after webhook-only payment state changes.
 - Full ACP wire conformance is not claimed.
 - AP2 wire interoperability is not claimed.
-- Growth Agent runs and traces are not yet durable; they remain merchant-process memory until Phase C persistence.
+- The current Growth Agent demo always uses an application-selected merchant campaign; production campaign scheduling/targeting remains future work.
 
 ## Next Step
-Phase C: persist Growth Agent runs/steps and wire `prepare_offer` into buyer offer delivery, explicit approval, fresh quote revalidation and the existing MANDATE authorization path. Then execute a real Test Mode campaign cohort and calculate realized uplift only from independently verified Razorpay Test Mode payments.
+Execute a real Test Mode campaign cohort from the Growth Agent offer flow, persist independently verified Razorpay Test Mode payment evidence with the campaign identifier, and calculate realized incremental revenue/uplift against a control cohort without claiming causal significance beyond the observed test data.
