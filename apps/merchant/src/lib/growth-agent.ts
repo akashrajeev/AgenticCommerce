@@ -169,8 +169,9 @@ function listOpportunitiesTool(run: GrowthAgentRun): unknown {
     if (!source || !target) return false;
     return source.pricePaise + target.pricePaise <= run.maxSpendPaise;
   });
-  if (!opportunities.length) throw new Error("GROWTH_AGENT_NO_ELIGIBLE_OPPORTUNITY");
-  run.selectedOpportunity = opportunities[0];
+  const selectedOpportunity = opportunities[0];
+  if (!selectedOpportunity) throw new Error("GROWTH_AGENT_NO_ELIGIBLE_OPPORTUNITY");
+  run.selectedOpportunity = selectedOpportunity;
   return {
     count: opportunities.length,
     opportunities: opportunities.slice(0, 12).map((opportunity) => ({
@@ -184,10 +185,10 @@ function listOpportunitiesTool(run: GrowthAgentRun): unknown {
     })),
     selectedOpportunity: {
       campaignId: run.campaignId,
-      sourceProductId: opportunities[0].sourceProductId,
-      targetProductId: opportunities[0].productId,
-      score: opportunities[0].score,
-      incrementalRevenuePaise: opportunities[0].incrementalRevenuePaise,
+      sourceProductId: selectedOpportunity.sourceProductId,
+      targetProductId: selectedOpportunity.productId,
+      score: selectedOpportunity.score,
+      incrementalRevenuePaise: selectedOpportunity.incrementalRevenuePaise,
     },
   };
 }
@@ -311,7 +312,8 @@ function defaultGrowthAgentPlanner(): GrowthAgentPlanner {
     if (!response.ok) throw new Error(`GROWTH_AGENT_AI_HTTP_${response.status}`);
     const calls = extractFunctionCalls(body);
     if (calls.length !== 1) throw new Error(calls.length === 0 ? "GROWTH_AGENT_NO_TOOL_CALL" : "GROWTH_AGENT_MULTIPLE_TOOL_CALLS");
-    const call = calls[0];
+    const call = calls.at(0);
+    if (!call) throw new Error("GROWTH_AGENT_NO_TOOL_CALL");
     assertAllowedTool(call.name);
     let parsedArguments: unknown;
     try {
