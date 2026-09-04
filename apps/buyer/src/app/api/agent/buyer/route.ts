@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getBuyerAgentRun } from "../../../../../../lib/buyer-agent";
-import { getBuyerAgentHistory, getBuyerAgentTrace, runBuyerAgent } from "../../../../../../lib/buyer-agent-orchestrator";
+import { getBuyerAgentRun } from "../../../../lib/buyer-agent";
+import { getBuyerAgentHistory, getBuyerAgentTrace, runBuyerAgent } from "../../../../lib/buyer-agent-orchestrator";
 
 function parseInput(value: unknown): {
   objective: string;
