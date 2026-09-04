@@ -8,6 +8,11 @@ import {
 } from "./buyer-agent";
 import { buildBuyerAgentObservation } from "./buyer-agent-observation";
 import {
+  BUYER_AGENT_OFFER_EVALUATION_TOOL,
+  BUYER_AGENT_OFFER_EVALUATION_TOOL_NAME,
+  executeBuyerAgentOfferEvaluationTool,
+} from "./buyer-agent-offer-evaluation";
+import {
   BUYER_AGENT_SELECTION_TOOL,
   BUYER_AGENT_SELECTION_TOOL_NAME,
   executeBuyerAgentSelectionTool,
@@ -21,7 +26,7 @@ import {
   type BuyerAgentWorkspace,
 } from "./buyer-agent-tools";
 
-export type BuyerPlanningToolName = BuyerAgentToolName | typeof BUYER_AGENT_SELECTION_TOOL_NAME;
+export type BuyerPlanningToolName = BuyerAgentToolName | typeof BUYER_AGENT_SELECTION_TOOL_NAME | typeof BUYER_AGENT_OFFER_EVALUATION_TOOL_NAME;
 
 export type BuyerAgentPlanner = (input: {
   run: BuyerAgentRun;
@@ -79,11 +84,13 @@ const BASE_BUYER_AGENT_MODEL_TOOLS = BUYER_AGENT_TOOLS.map((tool) => {
 const BUYER_AGENT_MODEL_TOOLS = [
   ...BASE_BUYER_AGENT_MODEL_TOOLS,
   BUYER_AGENT_SELECTION_TOOL,
+  BUYER_AGENT_OFFER_EVALUATION_TOOL,
 ];
 
 const ALL_BUYER_PLANNING_TOOLS = [
   ...BUYER_AGENT_TOOL_NAMES,
   BUYER_AGENT_SELECTION_TOOL_NAME,
+  BUYER_AGENT_OFFER_EVALUATION_TOOL_NAME,
 ] as const;
 
 function now(): string {
@@ -155,8 +162,9 @@ function describeTool(name: BuyerPlanningToolName): string {
     case "get_quote": return "Refresh the current merchant price for the proposed basket.";
     case "compare_products": return "Compare observed candidates on normalized product facts.";
     case "select_product": return "Select one observed product using explicit buyer-facing reasoning and immutable constraints.";
-    case "get_merchant_recommendations": return "Evaluate merchant-published upsell/cross-sell options.";
-    case "build_basket": return "Construct a buyer-proposed basket and obtain a quote.";
+    case "get_merchant_recommendations": return "Read merchant-published upsell/cross-sell options.";
+    case "evaluate_merchant_offer": return "Explicitly accept or reject a merchant offer using buyer intent and constraints.";
+    case "build_basket": return "Construct a buyer-proposed basket and obtain a fresh quote.";
     case "validate_budget": return "Deterministically verify the basket total against the hard limit.";
     case "prepare_approval": return "Freeze a review-ready proposal without authorizing payment.";
   }
@@ -233,7 +241,9 @@ export async function runBuyerAgent(options: {
       try {
         const result = plan.tool === BUYER_AGENT_SELECTION_TOOL_NAME
           ? executeBuyerAgentSelectionTool({ run, workspace }, plan.arguments)
-          : await executeBuyerAgentTool({ run, workspace, merchantInternalUrl: options.merchantInternalUrl }, plan.tool, plan.arguments);
+          : plan.tool === BUYER_AGENT_OFFER_EVALUATION_TOOL_NAME
+            ? executeBuyerAgentOfferEvaluationTool({ run, workspace }, plan.arguments)
+            : await executeBuyerAgentTool({ run, workspace, merchantInternalUrl: options.merchantInternalUrl }, plan.tool, plan.arguments);
 
         traceStep.status = "succeeded";
         traceStep.output = result.result;
@@ -247,9 +257,7 @@ export async function runBuyerAgent(options: {
           transitionIfPossible(run, "SEARCHING");
         } else if (plan.tool === "compare_products") {
           transitionIfPossible(run, "COMPARING");
-        } else if (plan.tool === BUYER_AGENT_SELECTION_TOOL_NAME) {
-          transitionIfPossible(run, "BUILDING_BASKET");
-        } else if (plan.tool === "build_basket") {
+        } else if (plan.tool === BUYER_AGENT_SELECTION_TOOL_NAME || plan.tool === "build_basket") {
           transitionIfPossible(run, "BUILDING_BASKET");
         } else if (plan.tool === "prepare_approval") {
           assertBuyerBudget(run, workspace.latestQuote?.totalPaise ?? -1);
@@ -301,7 +309,7 @@ async function defaultBuyerAgentPlanner(input: Parameters<BuyerAgentPlanner>[0])
         "Use compare_products when multiple observed candidates need explicit comparison.",
         "Use select_product to make an explicit candidate choice after comparing observed facts. Supply a concise user-facing reason.",
         "Verify inventory before relying on a selected product.",
-        "Evaluate merchant recommendations for usefulness to the user's stated goal; do not blindly maximize spend.",
+        "Read merchant recommendations and explicitly evaluate relevant offers; do not blindly maximize spend.",
         "Use fresh quotes before finalizing a basket.",
         "If a tool fails or a candidate becomes unavailable, replan from observed facts.",
         "The hard spending limit is application-owned and immutable.",
