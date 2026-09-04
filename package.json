@@ -8,7 +8,7 @@
     "build": "npm run build -w @mandate/types && npm run build -w @mandate/shared && npm run build -w @mandate/schemas && npm run build -w @mandate/gateway && npm run build -w @mandate/merchant && npm run build -w @mandate/buyer && npm --prefix apps/service run build",
     "lint": "eslint .",
     "typecheck": "npm run build -w @mandate/types && npm run build -w @mandate/shared && npm run build -w @mandate/schemas && npm run typecheck -w @mandate/gateway && npm run typecheck -w @mandate/merchant && npm run typecheck -w @mandate/buyer && npm --prefix apps/service run typecheck",
-    "test": "npm run test -w @mandate/gateway && npm --prefix apps/service run test",
+    "test": "npm run test -w @mandate/gateway && npm run test -w @mandate/merchant && npm --prefix apps/service run test",
     "format": "prettier . --write",
     "format:check": "prettier . --check"
   },
