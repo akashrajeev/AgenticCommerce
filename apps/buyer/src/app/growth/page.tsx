@@ -100,13 +100,21 @@ export default function GrowthPage() {
     finally { setBusy(false); }
   }
 
-  async function createTestModeOrder(transactionId: string) {
+  async function createTestModeOrder(transactionId: string, campaignId?: string) {
     setBusy(true); setMessage("");
     try {
+      if (!campaignId) {
+        const response = await fetch(`${gateway}/v1/transactions/${encodeURIComponent(transactionId)}/razorpay-order`, { method: "POST", cache: "no-store" });
+        const body = await response.json() as { transaction?: Transaction; order?: { id: string; amount: number; currency: string }; checkout?: { keyId: string; currency: "INR" }; error?: string };
+        if (!response.ok || !body.transaction || !body.order || !body.checkout) throw new Error(body.error ?? "Control Test Mode order creation failed.");
+        setCohortOrder({ transactionId, ok: true, order: body.order, checkout: body.checkout });
+        setMessage("Control transaction passed the same signed MANDATE boundary and now has an untagged Razorpay Test Mode order.");
+        return;
+      }
       const response = await fetch(`${merchant}/api/campaign-orchestrator`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ campaignId: "headphone-aov", transactionIds: [transactionId] }),
+        body: JSON.stringify({ campaignId, transactionIds: [transactionId] }),
         cache: "no-store",
       });
       const body = await response.json() as { results?: CohortOrder[]; error?: string };
@@ -144,7 +152,7 @@ export default function GrowthPage() {
       amount: cohortOrder.order.amount,
       currency: cohortOrder.checkout.currency,
       name: "Mandate Market",
-      description: "Headphone AOV lift · Growth Agent Test Mode cohort",
+      description: cohortOrder.campaignId ? "Headphone AOV lift · Growth Agent Test Mode cohort" : "Headphone AOV lift · Control Test Mode cohort",
       order_id: cohortOrder.order.id,
       handler: async (payment: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => {
         setPaymentStatus("VERIFYING_SIGNATURE");
@@ -155,7 +163,7 @@ export default function GrowthPage() {
           setPaymentStatus(body?.verified ? "PAYMENT_VERIFIED" : "RECONCILING");
           const latest = await pollTransaction(cohortOrder.transactionId);
           setPaymentStatus(latest === "order_confirmed" ? "ORDER_CONFIRMED" : latest === "payment_failed" ? "PAYMENT_FAILED" : "RECONCILIATION_PENDING");
-          if (latest === "order_confirmed") setMessage("Razorpay Test Mode payment is verified and the merchant order is confirmed. Open Growth Attribution to inspect the evidence-backed campaign uplift.");
+          if (latest === "order_confirmed") setMessage("Razorpay Test Mode payment is verified and the merchant order is confirmed. The experiment evidence endpoint can now count this payment.");
         } catch (error) {
           setPaymentStatus("VERIFY_FAILED");
           setMessage(error instanceof Error ? error.message : "Payment verification failed.");
@@ -192,12 +200,28 @@ export default function GrowthPage() {
       if (!mandateResponse.ok || !body.transaction) throw new Error(body.error ?? "MANDATE rejected the growth basket.");
       const nextTransaction = body.transaction as Transaction & { state: string };
       setTransaction(nextTransaction);
-      if (nextTransaction.state === "policy_authorized") {
-        await createTestModeOrder(nextTransaction.id);
-      } else {
-        setMessage("MANDATE blocked the approved basket before payment.");
-      }
+      if (nextTransaction.state === "policy_authorized") await createTestModeOrder(nextTransaction.id, "headphone-aov");
+      else setMessage("MANDATE blocked the approved basket before payment.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Growth approval failed."); }
+    finally { setBusy(false); }
+  }
+
+  async function approveControl() {
+    if (!result) return;
+    setBusy(true); setMessage(""); setCohortOrder(null); setPaymentStatus("");
+    try {
+      const lineItems = [{ productId: result.sourceProduct.id, quantity: 1 }];
+      const quoteResponse = await fetch(`${merchant}/api/agent/checkout/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lineItems }) });
+      const quoteBody = await quoteResponse.json();
+      if (!quoteResponse.ok || !quoteBody.quote) throw new Error(quoteBody.error ?? "Control quote failed.");
+      const mandateResponse = await fetch("/api/growth-approval", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ quote: quoteBody.quote, maxSpendPaise: Math.round(Number(budget) * 100), reason: "Approved growth experiment control purchase" }), cache: "no-store" });
+      const body = await mandateResponse.json();
+      if (!mandateResponse.ok || !body.transaction) throw new Error(body.error ?? "MANDATE rejected the control purchase.");
+      const nextTransaction = body.transaction as Transaction;
+      setTransaction(nextTransaction);
+      if (nextTransaction.state === "policy_authorized") await createTestModeOrder(nextTransaction.id);
+      else setMessage("MANDATE blocked the control purchase before payment.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Control purchase failed."); }
     finally { setBusy(false); }
   }
 
@@ -223,15 +247,12 @@ export default function GrowthPage() {
             {!result ? <div className={styles.empty}><span>↑</span><p>Run discovery to see upsell and cross-sell opportunities backed by the merchant catalog.</p></div> : <>
               <div className={styles.source}><span>BASE</span><strong>{result.sourceProduct.name}</strong><b>{money(result.sourceProduct.pricePaise)}</b></div>
               <div className={styles.opportunities}>{result.opportunities.map((opportunity) => <button key={opportunity.opportunityId} onClick={() => { setSelectedId(opportunity.opportunityId); setAgentRun(null); setCohortOrder(null); setPaymentStatus(""); }} className={`${styles.opportunity} ${selected?.opportunityId === opportunity.opportunityId ? styles.selected : ""}`}><div><div className={styles.badgeRow}><span className={styles.badge}>{opportunity.type}</span><span className={styles.score}>score {opportunity.score}</span>{opportunity.budgetFit ? <span className={styles.fit}>budget fit</span> : <span className={styles.noFit}>over budget</span>}</div><strong>{opportunity.recommendedProductId}</strong><p>{opportunity.rationale}</p></div><div className={styles.value}><strong>+{money(opportunity.incrementalRevenue.amountPaise)}</strong><small>{money(opportunity.projectedBasket.amountPaise)} basket</small></div></button>)}</div>
-
               {agentRun && <div className={styles.source}><div><span>GROWTH AGENT</span><strong>{agentRun.state}</strong><small>{agentRun.plannerModel ?? "planner"} · {agentRun.plannerCalls} planner call(s) · {agentRun.id}</small></div>{agentRun.preparedOffer && <b>{money(agentRun.preparedOffer.bundleAmountPaise)}</b>}</div>}
               {agentRun && <div className={styles.opportunities}>{agentRun.trace.map((step) => <div key={`${agentRun.id}:${step.step}`} className={styles.source}><div><span>STEP {step.step}</span><strong>{step.tool}</strong><small>{step.status}{step.durationMs !== undefined ? ` · ${step.durationMs} ms` : ""}{step.error ? ` · ${step.error}` : ""}</small></div></div>)}</div>}
-
-              {selected && <div className={styles.approval}><div><span className={styles.panelKicker}>{agentOfferReady ? "AGENT OFFER / APPROVAL" : "APPROVAL"}</span><h3>{agentOfferReady ? "Review the Growth Agent offer" : selected.type === "UPSELL" ? "Upgrade the product" : "Add a complementary item"}</h3><p>{agentOfferReady ? "The agent prepared this offer, but it cannot authorize payment. Your approval creates a fresh quote, signs a human-present mandate at the buyer boundary, enters MANDATE, and then can create a real attributable Test Mode order." : selected.rationale}</p></div><div className={styles.approvalMeta}><span>Incremental value<strong>{money(agentRun?.preparedOffer?.incrementalRevenuePaise ?? selected.incrementalRevenue.amountPaise)}</strong></span><span>Projected basket<strong>{money(agentRun?.preparedOffer?.bundleAmountPaise ?? selected.projectedBasket.amountPaise)}</strong></span></div><button className={styles.approve} disabled={busy || !selected.budgetFit || (Boolean(agentRun) && !agentOfferReady)} onClick={() => void approve()}>{agentRun && !agentOfferReady ? "Agent offer not ready" : selected.budgetFit ? "Approve & route through MANDATE" : "Outside customer budget"}<span>→</span></button></div>}
-
+              {selected && <div className={styles.approval}><div><span className={styles.panelKicker}>{agentOfferReady ? "AGENT OFFER / APPROVAL" : "APPROVAL"}</span><h3>{agentOfferReady ? "Review the Growth Agent offer" : selected.type === "UPSELL" ? "Upgrade the product" : "Add a complementary item"}</h3><p>{agentOfferReady ? "The agent prepared this offer, but it cannot authorize payment. Your approval creates a fresh quote, signs a human-present mandate at the buyer boundary, enters MANDATE, and then can create a real attributable Test Mode order." : selected.rationale}</p></div><div className={styles.approvalMeta}><span>Incremental value<strong>{money(agentRun?.preparedOffer?.incrementalRevenuePaise ?? selected.incrementalRevenue.amountPaise)}</strong></span><span>Projected basket<strong>{money(agentRun?.preparedOffer?.bundleAmountPaise ?? selected.projectedBasket.amountPaise)}</strong></span></div><button className={styles.approve} disabled={busy || !selected.budgetFit || (Boolean(agentRun) && !agentOfferReady)} onClick={() => void approve()}>{agentRun && !agentOfferReady ? "Agent offer not ready" : selected.budgetFit ? "Approve & route through MANDATE" : "Outside customer budget"}<span>→</span></button><button className={styles.approve} disabled={busy} onClick={() => void approveControl()}>Create signed control transaction <span>→</span></button></div>}
               {transaction && <div className={`${styles.transaction} ${transaction.state === "policy_authorized" ? styles.allowed : styles.blocked}`}><div><span>MANDATE DECISION</span><strong>{transaction.state === "policy_authorized" ? "ALLOWED" : "BLOCKED"}</strong><small>{transaction.id}</small></div><b>{money(transaction.quote.totalPaise)}</b></div>}
-              {cohortOrder && <div className={styles.transaction}><div><span>TEST MODE COHORT</span><strong>{cohortReady ? "ORDER CREATED" : "BLOCKED"}</strong><small>{cohortOrder.order?.id ?? cohortOrder.error ?? "No Razorpay order"}</small></div>{cohortReady ? <button className={styles.approve} disabled={paymentStatus === "CHECKOUT_OPEN" || paymentStatus === "ORDER_CONFIRMED"} onClick={() => openRazorpay()}>{paymentStatus === "ORDER_CONFIRMED" ? "Payment confirmed" : paymentStatus ? paymentStatus.replaceAll("_", " ") : "Pay in Razorpay Test Mode →"}</button> : <b>NO ORDER</b>}</div>}
-              {paymentStatus === "ORDER_CONFIRMED" && <div className={styles.message}><a href="/growth-attribution">Open evidence-backed campaign attribution →</a></div>}
+              {cohortOrder && <div className={styles.transaction}><div><span>{cohortOrder.campaignId ? "TREATMENT TEST MODE" : "CONTROL TEST MODE"}</span><strong>{cohortReady ? "ORDER CREATED" : "BLOCKED"}</strong><small>{cohortOrder.order?.id ?? cohortOrder.error ?? "No Razorpay order"}</small></div>{cohortReady ? <button className={styles.approve} disabled={paymentStatus === "CHECKOUT_OPEN" || paymentStatus === "ORDER_CONFIRMED"} onClick={() => openRazorpay()}>{paymentStatus === "ORDER_CONFIRMED" ? "Payment confirmed" : paymentStatus ? paymentStatus.replaceAll("_", " ") : "Pay in Razorpay Test Mode →"}</button> : <b>NO ORDER</b>}</div>}
+              {paymentStatus === "ORDER_CONFIRMED" && <div className={styles.message}><a href="/growth-experiment">Open treatment/control experiment →</a></div>}
             </>}
           </section>
         </section>
