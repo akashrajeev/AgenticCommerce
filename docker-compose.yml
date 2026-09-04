@@ -108,6 +108,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      DATABASE_URL: postgresql://mandate:mandate@postgres:5432/mandate
       GATEWAY_INTERNAL_URL: http://gateway:4000
       MCP_INTERNAL_URL: http://mcp:4100
       MCP_AGENT_TOKEN: ${MCP_AGENT_TOKEN:-mandate-local-mcp}
@@ -120,6 +121,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 5s
