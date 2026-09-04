@@ -51,7 +51,7 @@ test("createOrder carries campaign attribution into Razorpay Test Mode notes", a
       receipt: "txn_growth_001",
       status: "created",
       attempts: 0,
-      notes: requestBody?.notes ?? {},
+      notes: (requestBody?.notes && typeof requestBody.notes === "object" ? requestBody.notes : {}),
       created_at: 1,
     }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
@@ -63,7 +63,8 @@ test("createOrder carries campaign attribution into Razorpay Test Mode notes", a
   } as unknown as import("@mandate/types").Transaction, { campaignId: "headphone-aov" });
 
   assert.equal(order.id, "order_test_growth");
-  const notes = requestBody?.notes as Record<string, unknown>;
+  const notes = requestBody?.notes as Record<string, unknown> | undefined;
+  assert.ok(notes);
   assert.equal(notes.growth_campaign_id, "headphone-aov");
   assert.equal(notes.mandate_transaction_id, "txn_growth_001");
 });
