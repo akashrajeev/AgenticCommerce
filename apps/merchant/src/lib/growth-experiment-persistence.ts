@@ -20,6 +20,27 @@ export type GrowthExperimentAssignment = {
   assignedAt: string;
 };
 
+export type GrowthExperimentExecutionStatus =
+  | "READY"
+  | "ORDER_CREATED"
+  | "PAYMENT_PENDING"
+  | "CONFIRMED"
+  | "FAILED"
+  | "RECOVERY_READY";
+
+export type GrowthExperimentExecution = {
+  experimentId: string;
+  transactionId: string;
+  cohort: GrowthExperimentCohort;
+  status: GrowthExperimentExecutionStatus;
+  attempt: number;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  lastError?: string;
+  startedAt: string;
+  updatedAt: string;
+};
+
 const DATABASE_URL = process.env.DATABASE_URL?.trim() || "";
 const PERSISTENCE_DISABLED = process.env.GROWTH_EXPERIMENT_PERSISTENCE_DISABLED === "1";
 
@@ -58,6 +79,20 @@ async function ensureSchema(): Promise<void> {
         CONSTRAINT growth_experiment_assignment_key UNIQUE (experiment_id, transaction_id)
       )`;
       await sql`CREATE INDEX IF NOT EXISTS growth_experiment_assignments_experiment_cohort_idx ON growth_experiment_assignments(experiment_id, cohort, assigned_at)`;
+      await sql`CREATE TABLE IF NOT EXISTS growth_experiment_executions (
+        experiment_id TEXT NOT NULL REFERENCES growth_experiments(experiment_id) ON DELETE CASCADE,
+        transaction_id TEXT PRIMARY KEY,
+        cohort TEXT NOT NULL CHECK (cohort IN ('treatment', 'control')),
+        status TEXT NOT NULL CHECK (status IN ('READY', 'ORDER_CREATED', 'PAYMENT_PENDING', 'CONFIRMED', 'FAILED', 'RECOVERY_READY')),
+        attempt INTEGER NOT NULL CHECK (attempt >= 0),
+        razorpay_order_id TEXT,
+        razorpay_payment_id TEXT,
+        last_error TEXT,
+        started_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT growth_experiment_execution_key UNIQUE (experiment_id, transaction_id)
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS growth_experiment_executions_experiment_status_idx ON growth_experiment_executions(experiment_id, status, updated_at DESC)`;
     })().catch((error) => {
       schemaReady = undefined;
       throw error;
@@ -124,6 +159,72 @@ function mapAssignment(row: Record<string, unknown>): GrowthExperimentAssignment
     ...(typeof row.target_product_id === "string" ? { targetProductId: row.target_product_id } : {}),
     assignedAt: new Date(String(row.assigned_at)).toISOString(),
   };
+}
+
+function mapExecution(row: Record<string, unknown>): GrowthExperimentExecution {
+  return {
+    experimentId: String(row.experiment_id),
+    transactionId: String(row.transaction_id),
+    cohort: String(row.cohort) as GrowthExperimentCohort,
+    status: String(row.status) as GrowthExperimentExecutionStatus,
+    attempt: Number(row.attempt),
+    ...(typeof row.razorpay_order_id === "string" ? { razorpayOrderId: row.razorpay_order_id } : {}),
+    ...(typeof row.razorpay_payment_id === "string" ? { razorpayPaymentId: row.razorpay_payment_id } : {}),
+    ...(typeof row.last_error === "string" ? { lastError: row.last_error } : {}),
+    startedAt: new Date(String(row.started_at)).toISOString(),
+    updatedAt: new Date(String(row.updated_at)).toISOString(),
+  };
+}
+
+export async function createOrUpdateGrowthExperimentExecution(execution: GrowthExperimentExecution): Promise<GrowthExperimentExecution> {
+  const sql = getClient();
+  if (!sql) return execution;
+  await ensureSchema();
+  await sql`
+    INSERT INTO growth_experiment_executions (
+      experiment_id, transaction_id, cohort, status, attempt, razorpay_order_id, razorpay_payment_id, last_error, started_at, updated_at
+    ) VALUES (
+      ${execution.experimentId}, ${execution.transactionId}, ${execution.cohort}, ${execution.status}, ${execution.attempt},
+      ${execution.razorpayOrderId ?? null}, ${execution.razorpayPaymentId ?? null}, ${execution.lastError ?? null}, ${execution.startedAt}, ${execution.updatedAt}
+    )
+    ON CONFLICT (transaction_id) DO UPDATE SET
+      cohort = EXCLUDED.cohort,
+      status = EXCLUDED.status,
+      attempt = EXCLUDED.attempt,
+      razorpay_order_id = EXCLUDED.razorpay_order_id,
+      razorpay_payment_id = EXCLUDED.razorpay_payment_id,
+      last_error = EXCLUDED.last_error,
+      started_at = EXCLUDED.started_at,
+      updated_at = EXCLUDED.updated_at
+    WHERE growth_experiment_executions.experiment_id = EXCLUDED.experiment_id
+  `;
+  return execution;
+}
+
+export async function listGrowthExperimentExecutions(experimentId: string): Promise<GrowthExperimentExecution[]> {
+  const sql = getClient();
+  if (!sql) return [];
+  await ensureSchema();
+  const rows = await sql<Record<string, unknown>[]>`
+    SELECT experiment_id, transaction_id, cohort, status, attempt, razorpay_order_id, razorpay_payment_id, last_error, started_at, updated_at
+    FROM growth_experiment_executions
+    WHERE experiment_id = ${experimentId}
+    ORDER BY updated_at ASC
+  `;
+  return rows.map(mapExecution);
+}
+
+export async function getGrowthExperimentExecution(experimentId: string, transactionId: string): Promise<GrowthExperimentExecution | undefined> {
+  const sql = getClient();
+  if (!sql) return undefined;
+  await ensureSchema();
+  const rows = await sql<Record<string, unknown>[]>`
+    SELECT experiment_id, transaction_id, cohort, status, attempt, razorpay_order_id, razorpay_payment_id, last_error, started_at, updated_at
+    FROM growth_experiment_executions
+    WHERE experiment_id = ${experimentId} AND transaction_id = ${transactionId}
+  `;
+  const row = rows[0];
+  return row ? mapExecution(row) : undefined;
 }
 
 export async function getGrowthExperiment(experimentId: string): Promise<GrowthExperiment | undefined> {
