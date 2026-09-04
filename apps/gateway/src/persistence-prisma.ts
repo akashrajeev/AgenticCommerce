@@ -101,6 +101,7 @@ async function ensureCampaignPaymentEvidenceTable(prisma: Awaited<ReturnType<typ
     order_notes JSONB,
     verified_at TIMESTAMPTZ NOT NULL
   )`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE campaign_payment_evidence ADD COLUMN IF NOT EXISTS order_notes JSONB`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS campaign_payment_evidence_campaign_verified_idx ON campaign_payment_evidence(campaign_id, verified_at DESC)`);
 }
 
@@ -288,6 +289,7 @@ export async function saveNegotiationAcceptance(input: PersistedNegotiationAccep
       transactionId: input.transactionId,
       executionId: input.executionId,
       authorizationId: input.authorizationId,
+      createdAt: new Date(input.createdAt),
     },
   });
 }
@@ -337,25 +339,4 @@ export async function saveCampaignPaymentEvidence(input: PersistedCampaignPaymen
       verifiedAt: new Date(input.verifiedAt),
     },
   });
-}
-
-export async function loadCampaignPaymentEvidence(campaignId?: string): Promise<PersistedCampaignPaymentEvidence[]> {
-  const prisma = await getPrisma();
-  if (!prisma) return [];
-  await ensureCampaignPaymentEvidenceTable(prisma);
-  const rows = await prisma.campaignPaymentEvidence.findMany({
-    where: campaignId ? { campaignId } : undefined,
-    orderBy: { verifiedAt: "desc" },
-  });
-  return rows.map((row) => ({
-    evidenceId: row.evidenceId,
-    campaignId: row.campaignId,
-    transactionId: row.transactionId,
-    razorpayOrderId: row.razorpayOrderId,
-    razorpayPaymentId: row.razorpayPaymentId,
-    amountPaise: Number(row.amountPaise),
-    currency: row.currency,
-    orderNotes: row.orderNotes === null ? undefined : row.orderNotes as Record<string, string>,
-    verifiedAt: row.verifiedAt.toISOString(),
-  }));
 }
