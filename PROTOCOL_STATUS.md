@@ -128,6 +128,7 @@ mandate_razorpay_create_order
 mandate_razorpay_fetch_order
 mandate_razorpay_fetch_payment
 mandate_razorpay_capture_payment
+mandate_razorpay_verify_settlement
 ```
 
 Payment-changing operations require a valid MANDATE authorization ID and transaction binding. The MCP service sends trusted internal requests to the gateway; it does not hold or expose Razorpay API secrets to the agent.
@@ -138,102 +139,10 @@ Local Compose exposes the facade at:
 http://localhost:4100/mcp
 ```
 
-with bearer authentication through `MCP_AGENT_TOKEN` in production.
-
-The buyer-facing `/mcp` lab demonstrates unauthenticated rejection, current-protocol discovery, guarded tool enumeration and an authorization-bound payment attempt that fails closed without a MANDATE authorization.
-
 ## Phase 10 evidence
 
-The x402 experiment is implemented under `apps/service`:
+The x402 adapter is implemented separately from the Razorpay payment rail. It supports the HTTP-native v2 challenge/settlement flow and requires a signed MANDATE service authorization before facilitator settlement.
 
-```text
-apps/service/src/x402.ts
-apps/service/src/server.ts
-apps/service/src/x402.test.ts
-docs/X402-AGENT-SERVICE.md
-```
+## Phase 11 / 12 evidence
 
-The resource server implements the x402 v2 HTTP exchange:
-
-```text
-GET /resource without payment
-→ HTTP 402
-→ PAYMENT-REQUIRED: Base64(PaymentRequired v2)
-
-retry with PAYMENT-SIGNATURE
-→ decode + validate x402 v2 payment requirements
-→ validate signed MANDATE service authorization
-→ facilitator /verify
-→ facilitator /settle
-→ PAYMENT-RESPONSE
-→ HTTP 200 resource
-```
-
-MANDATE service authority binds the service ID, network, asset, recipient, maximum atomic amount, expiry and nonce. The replay key is consumed only after successful settlement. The service uses the configured facilitator for actual x402 verification/settlement; it does not pretend an unconfigured local payment is real.
-
-The Compose stack exposes the experimental resource server at:
-
-```text
-http://localhost:4021/resource
-```
-
-and the buyer-facing `/x402` lab demonstrates the initial 402 challenge.
-
-## Phase 11 evidence
-
-The adapter-ready NPCI profile lives in:
-
-```text
-apps/gateway/src/uap-profile.ts
-apps/gateway/src/uap-profile.test.ts
-docs/UAP-READINESS.md
-```
-
-The profile deliberately does not invent UAP endpoints or signatures. It encodes verified NPCI UPI Circle IoT delegation behavior—explicit user action, domestic P2M context, INR 5,000 maximum per transaction and INR 15,000 maximum monthly delegation—and maps a future UAP request into the existing MANDATE authority core. NPCI's published addendum states those delegation constraints for IoT device/software profiles. 
-
-The current status is:
-
-```text
-NPCI UAP Profile → research-adapter-ready → not executable
-```
-
-This keeps the project ready for a future authoritative UAP wire specification without overstating today's interoperability.
-
-## Phase 12 evidence
-
-The unified protocol registry lives in:
-
-```text
-packages/shared/src/protocol-registry.ts
-apps/buyer/src/app/api/protocol-router/route.ts
-apps/buyer/src/app/protocols/page.tsx
-```
-
-The buyer-facing control plane at:
-
-```text
-http://localhost:3001/protocols
-```
-
-shows every tracked protocol, runtime health for executable adapters, evidence/status, and a resolver for:
-
-```text
-merchant-checkout → MANDATE Native
-agent-service     → x402 v2
-agent tool        → MANDATE MCP Facade
-delegated-upi     → MANDATE Native + UAP reference profile
-```
-
-The resolver is intentionally fail-closed: an adapter-target, semantic-alignment or research-ready protocol cannot become a live payment route merely because it appears in discovery metadata.
-
-## Rule for upgrading a status
-
-A protocol can move from **target / aligned / ready** to **implemented** only after:
-
-1. the repository contains the relevant wire-format adapter;
-2. external payloads are validated at runtime;
-3. the adapter maps into the MANDATE authorization core;
-4. the integration is exercised with a real compatible endpoint or official test environment; and
-5. the result is documented with reproducible evidence.
-
-This keeps the submission ambitious without making claims the code cannot support.
+The NPCI UAP profile is intentionally research-bound and adapter-ready rather than a claimed native UAP implementation. The unified control plane at `/protocols` shows live executable MCP/Razorpay and x402 probes alongside explicit non-executable ACP/AP2/UAP statuses.
