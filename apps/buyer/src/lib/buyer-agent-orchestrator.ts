@@ -65,8 +65,19 @@ const MAX_HISTORY_ITEMS = 32;
 const histories = new Map<string, unknown[]>();
 const traces = new Map<string, BuyerAgentTraceStep[]>();
 
+const BASE_BUYER_AGENT_MODEL_TOOLS = BUYER_AGENT_TOOLS.map((tool) => {
+  if (tool.name !== "search_products") return tool;
+  return {
+    ...tool,
+    parameters: {
+      ...tool.parameters,
+      required: ["query", "category", "maxPricePaise", "inStockOnly"],
+    },
+  };
+});
+
 const BUYER_AGENT_MODEL_TOOLS = [
-  ...BUYER_AGENT_TOOLS,
+  ...BASE_BUYER_AGENT_MODEL_TOOLS,
   BUYER_AGENT_SELECTION_TOOL,
 ];
 
