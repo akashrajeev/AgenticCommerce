@@ -14,8 +14,8 @@
     "@mandate/shared": "0.1.0",
     "@mandate/types": "0.1.0",
     "next": "^15.1.3",
-    "react": "^19.0.2",
-    "react-dom": "^19.0.2"
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.2",
