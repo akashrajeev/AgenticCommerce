@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCampaignOpportunities, growthCampaigns, type GrowthCampaign } from "../../lib/campaigns";
+import { getCampaignOpportunities, growthCampaigns, type GrowthCampaign } from "../../../lib/campaigns";
 
 const GATEWAY_INTERNAL_URL = (process.env.GATEWAY_INTERNAL_URL ?? "http://localhost:4000").replace(/\/$/, "");
 const MCP_INTERNAL_URL = (process.env.MCP_INTERNAL_URL ?? "http://localhost:4100").replace(/\/$/, "");
