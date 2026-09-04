@@ -8,6 +8,11 @@ import {
 } from "./buyer-agent";
 import { buildBuyerAgentObservation } from "./buyer-agent-observation";
 import {
+  BUYER_AGENT_SELECTION_TOOL,
+  BUYER_AGENT_SELECTION_TOOL_NAME,
+  executeBuyerAgentSelectionTool,
+} from "./buyer-agent-selection";
+import {
   BUYER_AGENT_TOOLS,
   BUYER_AGENT_TOOL_NAMES,
   createBuyerAgentWorkspace,
@@ -16,13 +21,15 @@ import {
   type BuyerAgentWorkspace,
 } from "./buyer-agent-tools";
 
+export type BuyerPlanningToolName = BuyerAgentToolName | typeof BUYER_AGENT_SELECTION_TOOL_NAME;
+
 export type BuyerAgentPlanner = (input: {
   run: BuyerAgentRun;
   workspace: BuyerAgentWorkspace;
-  availableTools: readonly BuyerAgentToolName[];
+  availableTools: readonly BuyerPlanningToolName[];
   history: readonly unknown[];
 }) => Promise<{
-  tool: BuyerAgentToolName;
+  tool: BuyerPlanningToolName;
   arguments: Record<string, unknown>;
   callId: string;
   model: string;
@@ -32,7 +39,7 @@ export type BuyerAgentPlanner = (input: {
 export type BuyerAgentTraceStep = {
   step: number;
   state: BuyerAgentRun["state"];
-  tool: BuyerAgentToolName;
+  tool: BuyerPlanningToolName;
   arguments: Record<string, unknown>;
   status: "started" | "succeeded" | "failed";
   reason?: string;
@@ -58,16 +65,15 @@ const MAX_HISTORY_ITEMS = 32;
 const histories = new Map<string, unknown[]>();
 const traces = new Map<string, BuyerAgentTraceStep[]>();
 
-const BUYER_AGENT_MODEL_TOOLS = BUYER_AGENT_TOOLS.map((tool) => {
-  if (tool.name !== "search_products") return tool;
-  return {
-    ...tool,
-    parameters: {
-      ...tool.parameters,
-      required: ["query", "category", "maxPricePaise", "inStockOnly"],
-    },
-  };
-});
+const BUYER_AGENT_MODEL_TOOLS = [
+  ...BUYER_AGENT_TOOLS,
+  BUYER_AGENT_SELECTION_TOOL,
+];
+
+const ALL_BUYER_PLANNING_TOOLS = [
+  ...BUYER_AGENT_TOOL_NAMES,
+  BUYER_AGENT_SELECTION_TOOL_NAME,
+] as const;
 
 function now(): string {
   return new Date().toISOString();
@@ -91,8 +97,8 @@ function extractFunctionCall(body: Record<string, unknown> | null): { name: stri
   return { ...call, outputItems: output };
 }
 
-function assertAllowedTool(name: string): asserts name is BuyerAgentToolName {
-  if (!(BUYER_AGENT_TOOL_NAMES as readonly string[]).includes(name)) {
+function assertAllowedTool(name: string): asserts name is BuyerPlanningToolName {
+  if (!(ALL_BUYER_PLANNING_TOOLS as readonly string[]).includes(name)) {
     throw new Error("BUYER_AGENT_TOOL_NOT_ALLOWED");
   }
 }
@@ -128,7 +134,7 @@ function traceFor(runId: string): BuyerAgentTraceStep[] {
   return created;
 }
 
-function describeTool(name: BuyerAgentToolName): string {
+function describeTool(name: BuyerPlanningToolName): string {
   switch (name) {
     case "discover_merchant": return "Discover the merchant's machine-readable commerce contract.";
     case "read_catalog": return "Load the live machine-readable product catalog.";
@@ -137,6 +143,7 @@ function describeTool(name: BuyerAgentToolName): string {
     case "check_inventory": return "Verify current availability before basket construction.";
     case "get_quote": return "Refresh the current merchant price for the proposed basket.";
     case "compare_products": return "Compare observed candidates on normalized product facts.";
+    case "select_product": return "Select one observed product using explicit buyer-facing reasoning and immutable constraints.";
     case "get_merchant_recommendations": return "Evaluate merchant-published upsell/cross-sell options.";
     case "build_basket": return "Construct a buyer-proposed basket and obtain a quote.";
     case "validate_budget": return "Deterministically verify the basket total against the hard limit.";
@@ -186,7 +193,7 @@ export async function runBuyerAgent(options: {
         plan = await planner({
           run,
           workspace,
-          availableTools: BUYER_AGENT_TOOL_NAMES,
+          availableTools: ALL_BUYER_PLANNING_TOOLS,
           history: getHistory(run.id),
         });
         plannerCalls += 1;
@@ -213,7 +220,10 @@ export async function runBuyerAgent(options: {
       trace.push(traceStep);
 
       try {
-        const result = await executeBuyerAgentTool({ run, workspace, merchantInternalUrl: options.merchantInternalUrl }, plan.tool, plan.arguments);
+        const result = plan.tool === BUYER_AGENT_SELECTION_TOOL_NAME
+          ? executeBuyerAgentSelectionTool({ run, workspace }, plan.arguments)
+          : await executeBuyerAgentTool({ run, workspace, merchantInternalUrl: options.merchantInternalUrl }, plan.tool, plan.arguments);
+
         traceStep.status = "succeeded";
         traceStep.output = result.result;
         traceStep.completedAt = now();
@@ -226,6 +236,8 @@ export async function runBuyerAgent(options: {
           transitionIfPossible(run, "SEARCHING");
         } else if (plan.tool === "compare_products") {
           transitionIfPossible(run, "COMPARING");
+        } else if (plan.tool === BUYER_AGENT_SELECTION_TOOL_NAME) {
+          transitionIfPossible(run, "BUILDING_BASKET");
         } else if (plan.tool === "build_basket") {
           transitionIfPossible(run, "BUILDING_BASKET");
         } else if (plan.tool === "prepare_approval") {
@@ -274,9 +286,12 @@ async function defaultBuyerAgentPlanner(input: Parameters<BuyerAgentPlanner>[0])
         "You are the buyer agent inside MANDATE.",
         "Achieve the user's shopping objective using only the bounded buyer tools.",
         "Choose exactly one tool per turn.",
-        "Prefer observation before action: discover the merchant, read the catalog, search candidates, inspect and verify inventory.",
+        "Discover and observe before deciding whenever the needed facts are not yet known.",
+        "Use compare_products when multiple observed candidates need explicit comparison.",
+        "Use select_product to make an explicit candidate choice after comparing observed facts. Supply a concise user-facing reason.",
+        "Verify inventory before relying on a selected product.",
+        "Evaluate merchant recommendations for usefulness to the user's stated goal; do not blindly maximize spend.",
         "Use fresh quotes before finalizing a basket.",
-        "Evaluate merchant recommendations for usefulness to the user's stated goal; accept only useful additions within the immutable spending limit.",
         "If a tool fails or a candidate becomes unavailable, replan from observed facts.",
         "The hard spending limit is application-owned and immutable.",
         "Never authorize, create, capture, refund or claim a payment occurred.",
