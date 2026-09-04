@@ -38,9 +38,14 @@ test("webhook signature is validated against the raw payload", () => {
 });
 
 test("createOrder carries campaign attribution into Razorpay Test Mode notes", async () => {
-  let requestBody: Record<string, unknown> | null = null;
+  let capturedNotes: Record<string, unknown> = {};
   globalThis.fetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
-    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const requestNotes = requestBody.notes;
+    capturedNotes = requestNotes && typeof requestNotes === "object" && !Array.isArray(requestNotes)
+      ? requestNotes as Record<string, unknown>
+      : {};
+
     return new Response(JSON.stringify({
       id: "order_test_growth",
       entity: "order",
@@ -51,7 +56,10 @@ test("createOrder carries campaign attribution into Razorpay Test Mode notes", a
       receipt: "txn_growth_001",
       status: "created",
       attempts: 0,
-      notes: (requestBody?.notes && typeof requestBody.notes === "object" ? requestBody.notes : {}),
+      notes: {
+        growth_campaign_id: "headphone-aov",
+        mandate_transaction_id: "txn_growth_001",
+      },
       created_at: 1,
     }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
@@ -63,10 +71,8 @@ test("createOrder carries campaign attribution into Razorpay Test Mode notes", a
   } as unknown as import("@mandate/types").Transaction, { campaignId: "headphone-aov" });
 
   assert.equal(order.id, "order_test_growth");
-  const notes = requestBody?.notes as Record<string, unknown> | undefined;
-  assert.ok(notes);
-  assert.equal(notes.growth_campaign_id, "headphone-aov");
-  assert.equal(notes.mandate_transaction_id, "txn_growth_001");
+  assert.equal(capturedNotes.growth_campaign_id, "headphone-aov");
+  assert.equal(capturedNotes.mandate_transaction_id, "txn_growth_001");
 });
 
 test("createOrder rejects an invalid campaign identifier before calling Razorpay", async () => {
