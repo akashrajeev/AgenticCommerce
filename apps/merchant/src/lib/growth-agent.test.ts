@@ -10,6 +10,8 @@ import {
 } from "./growth-agent";
 import { growthCampaigns } from "./campaigns";
 
+process.env.GROWTH_AGENT_PERSISTENCE_DISABLED = "1";
+
 test.afterEach(() => resetGrowthAgentRunsForTests());
 
 function scriptedPlanner(tools: string[]): GrowthAgentPlanner {
