@@ -1,7 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import express, { type Request } from "express";
 import { config } from "./config.js";
-import { fetchOrder, fetchPayment, isRazorpayTestMode, probeTestModeCredentials } from "./razorpay.js";
 
 const app = express();
 const port = Number.parseInt(process.env.MCP_PORT ?? "4100", 10);
@@ -56,7 +55,6 @@ async function explainTransaction(transactionId: string): Promise<Record<string,
     explainable: true,
     paymentReady,
     blockers,
-    razorpayTestMode: isRazorpayTestMode(),
     intent: intent ? { merchantId: intent.merchantId ?? null, productId: intent.productId ?? null, quantity: intent.quantity ?? null, maxSpendPaise: intent.maxSpendPaise ?? null, reason: intent.reason ?? null } : null,
     quote: quote ? { quoteId: quote.quoteId ?? null, merchantId: quote.merchantId ?? null, totalPaise: quote.totalPaise ?? null, currency: quote.currency ?? null, expiresAt: quote.expiresAt ?? null, lineItems: quote.lineItems ?? [] } : null,
     policy: policy ? { decision: policy.decision ?? null, checks: policyChecks, evaluatedAt: policy.evaluatedAt ?? null } : null,
@@ -82,7 +80,9 @@ async function callTool(name: string, args: Record<string, unknown>) {
       if (transaction.razorpayPaymentId !== paymentId) throw new Error("RAZORPAY_PAYMENT_BINDING_MISMATCH");
       const quote = transaction.quote && typeof transaction.quote === "object" ? transaction.quote as Record<string, unknown> : {};
       const expectedAmount = typeof quote.totalPaise === "number" ? quote.totalPaise : NaN;
-      const [order, payment] = await Promise.all([fetchOrder(orderId), fetchPayment(paymentId)]);
+      const [orderResponse, paymentResponse] = await Promise.all([gatewayJson(`/v1/internal/razorpay/orders/${encodeURIComponent(orderId)}`), gatewayJson(`/v1/internal/razorpay/payments/${encodeURIComponent(paymentId)}`)]);
+      const order = (orderResponse as Record<string, unknown>).order as Record<string, unknown>;
+      const payment = (paymentResponse as Record<string, unknown>).payment as Record<string, unknown>;
       const amountMatches = order.amount === expectedAmount && payment.amount === expectedAmount;
       const orderMatches = order.receipt === transactionId && payment.order_id === orderId;
       const captured = payment.status === "captured" && (order.status === "paid" || order.amount_paid === order.amount);
@@ -98,14 +98,16 @@ async function callTool(name: string, args: Record<string, unknown>) {
 
 app.use(express.json({ limit: "64kb" }));
 app.get("/health", async (request, response) => {
-  const base = { app: "mandate-mcp", status: "ok", transport: "streamable-http", protocolVersions: [...protocolVersions], protocolVersion: MODERN_PROTOCOL_VERSION, razorpayTestMode: isRazorpayTestMode() };
+  const gatewayStatus = await gatewayJson("/v1/internal/razorpay/status").catch(() => ({ testMode: false, configured: false }));
+  const base = { app: "mandate-mcp", status: "ok", transport: "streamable-http", protocolVersions: [...protocolVersions], protocolVersion: MODERN_PROTOCOL_VERSION, razorpayTestMode: gatewayStatus && typeof gatewayStatus === "object" && "testMode" in gatewayStatus ? gatewayStatus.testMode === true : false };
   if (request.query.deep !== "1") return response.json(base);
   const started = Date.now();
   try {
-    const probe = await probeTestModeCredentials();
-    return response.json({ ...base, razorpayApiReachable: probe.reachable, razorpayProbe: { ...probe, latencyMs: Date.now() - started } });
+    const probeResponse = await gatewayJson("/v1/internal/razorpay/status?deep=1", { method: "GET" });
+    const probe = (probeResponse as Record<string, unknown>).probe as Record<string, unknown> | undefined;
+    return response.json({ ...base, razorpayTestMode: (probeResponse as Record<string, unknown>).testMode === true, razorpayApiReachable: probe?.reachable === true, razorpayProbe: { ...(probe ?? {}), latencyMs: Date.now() - started } });
   } catch (error) {
-    return response.status(503).json({ ...base, razorpayApiReachable: false, razorpayProbe: { reachable: false, testMode: isRazorpayTestMode(), detail: error instanceof Error ? error.message : "RAZORPAY_API_PROBE_FAILED", latencyMs: Date.now() - started } });
+    return response.status(503).json({ ...base, razorpayApiReachable: false, razorpayProbe: { reachable: false, testMode: base.razorpayTestMode, detail: error instanceof Error ? error.message : "RAZORPAY_API_PROBE_FAILED", latencyMs: Date.now() - started } });
   }
 });
 app.use((request, response, next) => { if (!isLocalOrigin(request.header("origin"))) return response.status(403).json({ error: "INVALID_MCP_ORIGIN" }); if (!authorizedRequest(request)) return response.status(401).json({ error: "UNAUTHORIZED_MCP_CLIENT" }); next(); });
@@ -129,10 +131,10 @@ app.post("/mcp", async (request, response) => {
   }
 
   try {
-    if (message.method === "server/discover") return response.json(jsonRpc(id, { protocolVersion: MODERN_PROTOCOL_VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.4.0" } }));
+    if (message.method === "server/discover") return response.json(jsonRpc(id, { protocolVersion: MODERN_PROTOCOL_VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.5.0" } }));
     if (message.method === "initialize") {
       if (protocolVersion === MODERN_PROTOCOL_VERSION) return response.json(jsonRpcError(id, -32601, "initialize is not supported in MCP 2026-07-28; use server/discover"));
-      return response.json(jsonRpc(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.4.0" } }));
+      return response.json(jsonRpc(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "MANDATE Razorpay MCP Policy Gateway", version: "0.5.0" } }));
     }
     if (message.method === "notifications/initialized") return protocolVersion === MODERN_PROTOCOL_VERSION ? response.status(204).end() : response.status(202).end();
     if (message.method === "ping") return response.json(jsonRpc(id, {}));
