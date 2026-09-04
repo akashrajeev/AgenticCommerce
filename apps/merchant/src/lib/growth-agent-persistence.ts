@@ -1,16 +1,14 @@
 import postgres from "postgres";
 import type { GrowthAgentRun, GrowthAgentTraceStep } from "./growth-agent";
 
-const DATABASE_URL = process.env.DATABASE_URL?.trim() || "";
-const PERSISTENCE_DISABLED = process.env.GROWTH_AGENT_PERSISTENCE_DISABLED === "1";
-
 let client: ReturnType<typeof postgres> | undefined;
 let schemaReady: Promise<void> | undefined;
 
 function getClient() {
-  if (PERSISTENCE_DISABLED) return undefined;
-  if (!DATABASE_URL) throw new Error("GROWTH_AGENT_PERSISTENCE_NOT_CONFIGURED");
-  if (!client) client = postgres(DATABASE_URL, { max: 1, connect_timeout: 5, idle_timeout: 20, prepare: false });
+  if (process.env.GROWTH_AGENT_PERSISTENCE_DISABLED === "1") return undefined;
+  const databaseUrl = process.env.DATABASE_URL?.trim() || "";
+  if (!databaseUrl) throw new Error("GROWTH_AGENT_PERSISTENCE_NOT_CONFIGURED");
+  if (!client) client = postgres(databaseUrl, { max: 1, connect_timeout: 5, idle_timeout: 20, prepare: false });
   return client;
 }
 
