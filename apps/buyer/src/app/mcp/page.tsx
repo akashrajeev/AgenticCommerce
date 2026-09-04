@@ -63,7 +63,7 @@ export default function McpLabPage() {
                 <strong>3. Discover the current MCP server</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: stateless 2026-07-28 `server/discover` response.</div>
               </button>
               <button disabled={!!busy} onClick={() => void run("tools", setTools)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #ddd", background: "#fafafa", cursor: "pointer" }}>
-                <strong>4. List payment tools</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: four guarded Razorpay operations.</div>
+                <strong>4. List payment tools</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: five guarded Razorpay operations.</div>
               </button>
               <button disabled={!!busy} onClick={() => void run("guard", setGuard)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #ddd", background: "#fafafa", cursor: "pointer" }}>
                 <strong>5. Attempt capture without MANDATE authorization</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: MCP request is accepted, but the payment operation fails closed at the MANDATE boundary.</div>
@@ -94,7 +94,7 @@ export default function McpLabPage() {
         <section style={{ marginTop: 20, background: "white", border: "1px solid #ddd", borderRadius: 18, padding: 24 }}>
           <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#666" }}>TRUST MODEL</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 16 }}>
-            {[["Agent", "Requests / proposals"], ["MCP facade", "Authentication + tool boundary"], ["MANDATE", "Authorization + deterministic policy"], ["Razorpay", "Payment rail"]].map(([label, detail]) => <div key={label} style={{ padding: 16, border: "1px solid #e3e3e3", borderRadius: 14 }}><strong>{label}</strong><div style={{ marginTop: 6, color: "#666", fontSize: 14 }}>{detail}</div></div>)}
+            [["Agent", "Requests / proposals"], ["MCP facade", "Authentication + tool boundary"], ["MANDATE", "Authorization + deterministic policy"], ["Razorpay", "Payment rail"]].map(([label, detail]) => <div key={label} style={{ padding: 16, border: "1px solid #e3e3e3", borderRadius: 14 }}><strong>{label}</strong><div style={{ marginTop: 6, color: "#666", fontSize: 14 }}>{detail}</div></div>)
           </div>
         </section>
       </div>
