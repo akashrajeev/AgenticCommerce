@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start --port 3000",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/lib/growth-agent.test.ts"
+    "test": "tsx --test src/lib/growth-agent.test.ts",
+    "test:integration": "tsx --test src/lib/growth-experiment-persistence.integration.test.ts"
   },
   "dependencies": {
     "@mandate/shared": "0.1.0",
