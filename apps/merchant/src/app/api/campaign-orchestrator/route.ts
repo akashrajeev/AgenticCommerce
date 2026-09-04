@@ -14,6 +14,26 @@ type MerchantTransaction = {
   amountPaise: number | null;
   state: string;
   razorpayOrderId: string | null;
+  razorpayPaymentId: string | null;
+};
+
+type MerchantOrder = {
+  merchantOrderId: string;
+  transactionId: string;
+  amountPaise: number;
+  baseAmountPaise: number;
+  incrementalRevenuePaise: number;
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+};
+
+type CampaignFunnel = {
+  eligibleOpportunities: number;
+  authorizedCandidates: number;
+  razorpayOrdersCreated: number;
+  razorpayVerifiedCaptures: number;
+  confirmedMerchantOrders: number;
+  realizedIncrementalRevenuePaise: number;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -60,6 +80,7 @@ function transactionPayload(transaction: Transaction, allowedProductIds: Set<str
     amountPaise: typeof quote?.totalPaise === "number" ? quote.totalPaise : null,
     state: String(transaction.state),
     razorpayOrderId: typeof transaction.razorpayOrderId === "string" ? transaction.razorpayOrderId : null,
+    razorpayPaymentId: typeof transaction.razorpayPaymentId === "string" ? transaction.razorpayPaymentId : null,
   };
 }
 
@@ -93,6 +114,70 @@ async function createTestOrder(authorizationId: string, transactionId: string, c
   }
 }
 
+async function verifyCaptured(candidate: MerchantTransaction): Promise<boolean> {
+  if (!MCP_AGENT_TOKEN || !candidate.razorpayOrderId || !candidate.razorpayPaymentId) return false;
+  try {
+    const response = await fetch(`${MCP_INTERNAL_URL}/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${MCP_AGENT_TOKEN}`,
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "tools/call",
+        "mcp-name": "mandate_razorpay_verify_settlement",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: `campaign-verify-${candidate.transactionId}`,
+        method: "tools/call",
+        params: {
+          name: "mandate_razorpay_verify_settlement",
+          arguments: { transactionId: candidate.transactionId, orderId: candidate.razorpayOrderId, paymentId: candidate.razorpayPaymentId },
+        },
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(12000),
+    });
+    const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+    const result = asRecord(body?.result);
+    const proof = asRecord(result?.structuredContent);
+    return response.ok && result?.isError !== true && proof?.verified === true && proof?.testMode === true;
+  } catch {
+    return false;
+  }
+}
+
+async function buildFunnel(campaign: GrowthCampaign, candidates: MerchantTransaction[]): Promise<CampaignFunnel> {
+  const orderCreatedCandidates = candidates.filter((candidate) => Boolean(candidate.razorpayOrderId));
+  const verifiedFlags = await Promise.all(orderCreatedCandidates.map(verifyCaptured));
+  const verifiedCaptures = verifiedFlags.filter(Boolean).length;
+  let confirmedMerchantOrders = 0;
+  let realizedIncrementalRevenuePaise = 0;
+  try {
+    const ordersBody = await gatewayJson("/v1/merchant/orders");
+    const orders = Array.isArray(ordersBody.orders) ? ordersBody.orders.map(asRecord).filter((item): item is Record<string, unknown> => item !== null) : [];
+    const selectedIds = new Set(candidates.map((candidate) => candidate.transactionId));
+    for (const rawOrder of orders) {
+      const order = rawOrder as Partial<MerchantOrder>;
+      if (typeof order.transactionId === "string" && selectedIds.has(order.transactionId) && typeof order.incrementalRevenuePaise === "number") {
+        confirmedMerchantOrders += 1;
+        realizedIncrementalRevenuePaise += order.incrementalRevenuePaise;
+      }
+    }
+  } catch {
+    confirmedMerchantOrders = 0;
+    realizedIncrementalRevenuePaise = 0;
+  }
+  return {
+    eligibleOpportunities: getCampaignOpportunities(campaign).length,
+    authorizedCandidates: candidates.length,
+    razorpayOrdersCreated: orderCreatedCandidates.length,
+    razorpayVerifiedCaptures: verifiedCaptures,
+    confirmedMerchantOrders,
+    realizedIncrementalRevenuePaise,
+  };
+}
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -104,11 +189,13 @@ export async function GET(request: Request) {
     const body = await gatewayJson("/v1/transactions");
     const raw = Array.isArray(body.transactions) ? body.transactions : [];
     const candidates = raw.map((value) => asRecord(value)).filter((value): value is Transaction => value !== null).map((transaction) => transactionPayload(transaction, allowedProductIds)).filter((value): value is MerchantTransaction => value !== null).slice(0, 12);
+    const funnel = await buildFunnel(campaign, candidates);
     return NextResponse.json({
       testModeOnly: true,
       campaign: campaignPayload(campaign),
       campaigns: growthCampaigns.map(campaignPayload),
       candidates,
+      funnel,
       maxBatchSize: 5,
       executionRule: "Only existing MANDATE-authorized transactions matching the selected campaign opportunity can create Razorpay Test Mode orders.",
     });
