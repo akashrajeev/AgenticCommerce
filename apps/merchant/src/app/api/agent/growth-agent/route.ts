@@ -5,6 +5,7 @@ import {
   listGrowthAgentRuns,
   runGrowthAgent,
 } from "../../../../lib/growth-agent";
+import { listPersistedGrowthAgentRuns, loadPersistedGrowthAgentRun } from "../../../../lib/growth-agent-persistence";
 
 export const dynamic = "force-dynamic";
 
@@ -14,21 +15,33 @@ function serializeRun(run: ReturnType<typeof createGrowthAgentRun>) {
     paymentAuthority: "MANDATE + Razorpay Test Mode",
     advisoryUntilAuthorization: true,
     testModeOnly: true,
+    persistence: "postgresql",
   };
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const runId = searchParams.get("runId");
-  if (runId) {
-    const run = getGrowthAgentRun(runId);
-    if (!run) return NextResponse.json({ error: "GROWTH_AGENT_RUN_NOT_FOUND" }, { status: 404 });
-    return NextResponse.json(serializeRun(run), { headers: { "cache-control": "no-store" } });
+  try {
+    if (runId) {
+      const live = getGrowthAgentRun(runId);
+      if (live) return NextResponse.json(serializeRun(live), { headers: { "cache-control": "no-store" } });
+      const persisted = await loadPersistedGrowthAgentRun(runId);
+      if (!persisted) return NextResponse.json({ error: "GROWTH_AGENT_RUN_NOT_FOUND" }, { status: 404 });
+      return NextResponse.json(serializeRun(persisted as ReturnType<typeof createGrowthAgentRun>), { headers: { "cache-control": "no-store" } });
+    }
+
+    const liveRuns = listGrowthAgentRuns();
+    const persistedRuns = await listPersistedGrowthAgentRuns();
+    const merged = new Map<string, ReturnType<typeof createGrowthAgentRun>>();
+    for (const run of persistedRuns) merged.set(run.id, run as ReturnType<typeof createGrowthAgentRun>);
+    for (const run of liveRuns) merged.set(run.id, run);
+    const runs = [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return NextResponse.json({ testModeOnly: true, runs: runs.map(serializeRun) }, { headers: { "cache-control": "no-store" } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GROWTH_AGENT_PERSISTENCE_FAILED";
+    return NextResponse.json({ error: message, testModeOnly: true, persistence: "postgresql" }, { status: 503 });
   }
-  return NextResponse.json({
-    testModeOnly: true,
-    runs: listGrowthAgentRuns().map(serializeRun),
-  }, { headers: { "cache-control": "no-store" } });
 }
 
 export async function POST(request: Request) {
