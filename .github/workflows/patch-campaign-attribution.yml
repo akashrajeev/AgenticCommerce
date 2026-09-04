@@ -1,0 +1,106 @@
+name: Apply campaign attribution patch
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-campaign-attribution.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, 'campaign attribution patch') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - name: Patch campaign attribution
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, label):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"missing {label} in {path}")
+              p.write_text(text.replace(old, new, 1))
+              print(f"patched {label}")
+
+          replace(
+              "apps/gateway/src/app.ts",
+              'const order = await createOrder(transaction);',
+              'const campaignId = typeof request.body?.campaignId === "string" ? request.body.campaignId.trim() : undefined; const order = await createOrder(transaction, campaignId ? { campaignId } : {});',
+              "gateway campaign context",
+          )
+
+          replace(
+              "apps/gateway/src/mcp-server.ts",
+              'inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" } }, required: ["authorizationId", "transactionId"] }',
+              'inputSchema: { type: "object", additionalProperties: false, properties: { authorizationId: { type: "string" }, transactionId: { type: "string" }, campaignId: { type: "string", minLength: 1, maxLength: 40 } }, required: ["authorizationId", "transactionId"] }',
+              "MCP create-order schema",
+          )
+
+          replace(
+              "apps/gateway/src/mcp-server.ts",
+              'case "mandate_razorpay_create_order": return gatewayJson(`/v1/mandates/${encodeURIComponent(requiredString(args, "authorizationId"))}/razorpay-order`, { method: "POST", body: JSON.stringify({ transactionId: requiredString(args, "transactionId") }) });',
+              'case "mandate_razorpay_create_order": { const authorizationId = requiredString(args, "authorizationId"); const transactionId = requiredString(args, "transactionId"); const campaignId = typeof args.campaignId === "string" ? args.campaignId.trim() : ""; return gatewayJson(`/v1/mandates/${encodeURIComponent(authorizationId)}/razorpay-order`, { method: "POST", body: JSON.stringify({ transactionId, ...(campaignId ? { campaignId } : {}) }) }); }',
+              "MCP create-order context",
+          )
+
+          replace(
+              "apps/gateway/src/mcp-server.ts",
+              'order: { id: order.id, status: order.status, amount: order.amount, amountPaid: order.amount_paid, receipt: order.receipt },',
+              'order: { id: order.id, status: order.status, amount: order.amount, amountPaid: order.amount_paid, receipt: order.receipt, notes: order.notes },',
+              "MCP Razorpay notes proof",
+          )
+
+          replace(
+              "apps/merchant/src/app/api/campaign-orchestrator/route.ts",
+              'async function createTestOrder(authorizationId: string, transactionId: string) {',
+              'async function createTestOrder(authorizationId: string, transactionId: string, campaignId: string) {',
+              "campaign order signature",
+          )
+
+          replace(
+              "apps/merchant/src/app/api/campaign-orchestrator/route.ts",
+              'params: { name: "mandate_razorpay_create_order", arguments: { authorizationId, transactionId } }',
+              'params: { name: "mandate_razorpay_create_order", arguments: { authorizationId, transactionId, campaignId } }',
+              "campaign order arguments",
+          )
+
+          replace(
+              "apps/merchant/src/app/api/campaign-orchestrator/route.ts",
+              'const result = await createTestOrder(candidate.authorizationId, candidate.transactionId);',
+              'const result = await createTestOrder(candidate.authorizationId, candidate.transactionId, campaign.id);',
+              "campaign order call",
+          )
+
+          p = Path("apps/merchant/src/app/growth-attribution/page.tsx")
+          text = p.read_text()
+          text = text.replace(
+              'type Proof = { verified?: boolean; testMode?: boolean; amountPaise?: number; orderId?: string; paymentId?: string };',
+              'type Proof = { verified?: boolean; testMode?: boolean; amountPaise?: number; orderId?: string; paymentId?: string; order?: { notes?: Record<string, string> } };',
+              1,
+          )
+          old_match = 'const recommendedIds = new Set(opportunities.map((item) => item.productId));\n    const matched = verified.filter(({ order }) => order.productId ? recommendedIds.has(order.productId) : false);'
+          new_match = 'const campaignId = campaign.id;\n    const matched = verified.filter(({ proof }) => proof?.order?.notes?.growth_campaign_id === campaignId);'
+          if old_match not in text:
+              raise SystemExit("missing campaign attribution match block")
+          text = text.replace(old_match, new_match, 1)
+          p.write_text(text)
+          print("patched campaign attribution matching")
+          PY
+      - name: Remove patcher
+        run: rm -f .github/workflows/patch-campaign-attribution.yml
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/gateway/src/app.ts apps/gateway/src/mcp-server.ts apps/merchant/src/app/api/campaign-orchestrator/route.ts apps/merchant/src/app/growth-attribution/page.tsx .github/workflows/patch-campaign-attribution.yml
+          git commit -m "feat: persist campaign attribution in Razorpay Test Mode orders"
+          git push origin main
