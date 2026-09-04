@@ -4,6 +4,15 @@ const gateway = (process.env.GATEWAY_INTERNAL_URL ?? "http://localhost:4000").re
 const merchant = (process.env.MERCHANT_INTERNAL_URL ?? "http://localhost:3000").replace(/\/$/, "");
 const mcp = (process.env.MCP_INTERNAL_URL ?? "http://localhost:4100").replace(/\/$/, "");
 
+type DeepStatusBody = {
+  testMode?: boolean;
+  configured?: boolean;
+  probe?: { testMode?: boolean; detail?: string };
+  razorpayTestMode?: boolean;
+  razorpayApiReachable?: boolean;
+  razorpayProbe?: { detail?: string };
+};
+
 async function probe(url: string, init: RequestInit = {}) {
   try {
     const response = await fetch(url, { ...init, cache: "no-store", signal: AbortSignal.timeout(5000) });
@@ -24,8 +33,8 @@ export async function GET() {
     }),
   ]);
 
-  const mcpBody = mcpHealth.body ?? {};
-  const razorpayBody = razorpayStatus.body ?? {};
+  const mcpBody = (mcpHealth.body ?? {}) as DeepStatusBody;
+  const razorpayBody = (razorpayStatus.body ?? {}) as DeepStatusBody;
   const checks = [
     { key: "gateway", label: "MANDATE gateway", ok: gatewayHealth.ok, detail: gatewayHealth.ok ? "authorization core reachable" : "gateway unavailable" },
     { key: "merchant", label: "Merchant agent", ok: merchantHealth.ok, detail: merchantHealth.ok ? "catalog and agent runtime reachable" : "merchant unavailable" },
