@@ -7,7 +7,8 @@
     "dev": "next dev --port 3001",
     "build": "next build",
     "start": "next start --port 3001",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/lib/buyer-agent.test.ts"
   },
   "dependencies": {
     "@mandate/shared": "0.1.0",
