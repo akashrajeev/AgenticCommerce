@@ -8,7 +8,7 @@
     "build": "npm run build -w @mandate/types && npm run build -w @mandate/shared && npm run build -w @mandate/schemas && npm run build -w @mandate/gateway && npm run build -w @mandate/merchant && npm run build -w @mandate/buyer && npm --prefix apps/service run build",
     "lint": "eslint .",
     "typecheck": "npm run build -w @mandate/types && npm run build -w @mandate/shared && npm run build -w @mandate/schemas && npm run typecheck -w @mandate/gateway && npm run typecheck -w @mandate/merchant && npm run typecheck -w @mandate/buyer && npm --prefix apps/service run typecheck",
-    "test": "npm run test -w @mandate/gateway && npm run test -w @mandate/merchant && npm --prefix apps/service run test",
+    "test": "npm run test -w @mandate/gateway && npm run test -w @mandate/merchant && npm run test -w @mandate/buyer && npm --prefix apps/service run test",
     "format": "prettier . --write",
     "format:check": "prettier . --check"
   },
@@ -25,7 +25,6 @@
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@next/eslint-plugin-next": "^16.3.4",
-    "@types/node": "^22.10.2",
     "eslint": "^9.17.0",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
