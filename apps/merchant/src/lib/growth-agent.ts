@@ -1,5 +1,6 @@
 import { buildMultiLineQuote, findProduct, MERCHANT_ID } from "./catalog";
 import { getCampaignOpportunities, getGrowthCampaign, type CampaignOpportunity } from "./campaigns";
+import { persistGrowthAgentCheckpoint } from "./growth-agent-persistence";
 
 export const GROWTH_AGENT_TOOL_NAMES = [
   "get_campaign",
@@ -363,16 +364,29 @@ export function createGrowthAgentRun(input: { objective: string; campaignId: str
   return run;
 }
 
+async function checkpoint(run: GrowthAgentRun, step?: GrowthAgentTraceStep): Promise<boolean> {
+  try {
+    await persistGrowthAgentCheckpoint(run, step);
+    return true;
+  } catch (error) {
+    run.lastPlannerError = error instanceof Error ? error.message : "GROWTH_AGENT_PERSISTENCE_FAILED";
+    setState(run, "FAILED");
+    return false;
+  }
+}
+
 export async function runGrowthAgent(runId: string, options: { planner?: GrowthAgentPlanner } = {}): Promise<GrowthAgentRun> {
   const run = runs.get(runId);
   if (!run) throw new Error("GROWTH_AGENT_RUN_NOT_FOUND");
   if (["COMPLETED", "FAILED"].includes(run.state)) return run;
 
   const planner = options.planner ?? defaultGrowthAgentPlanner();
+  if (!(await checkpoint(run))) return run;
 
   while (run.trace.length < run.maxSteps) {
     setState(run, "PLANNING");
     run.plannerCalls += 1;
+    if (!(await checkpoint(run))) return run;
 
     let decision: Awaited<ReturnType<GrowthAgentPlanner>>;
     try {
@@ -388,6 +402,7 @@ export async function runGrowthAgent(runId: string, options: { planner?: GrowthA
     } catch (error) {
       run.lastPlannerError = error instanceof Error ? error.message : "GROWTH_AGENT_PLANNER_FAILED";
       setState(run, "FAILED");
+      await checkpoint(run);
       return run;
     }
 
@@ -408,9 +423,12 @@ export async function runGrowthAgent(runId: string, options: { planner?: GrowthA
       output: JSON.stringify(output),
     });
 
+    if (!(await checkpoint(run, step))) return run;
+
     if (decision.tool === "prepare_offer" && step.status === "succeeded") {
       setState(run, "OFFER_READY");
       setState(run, "COMPLETED");
+      await checkpoint(run);
       return run;
     }
   }
@@ -418,6 +436,7 @@ export async function runGrowthAgent(runId: string, options: { planner?: GrowthA
   setState(run, "FAILED");
   const last = run.trace.at(-1);
   if (last && !last.error) last.error = "GROWTH_AGENT_MAX_STEPS_REACHED";
+  await checkpoint(run, last);
   return run;
 }
 
