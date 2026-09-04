@@ -28,6 +28,10 @@ type Candidate = {
   state: string;
 };
 
+type OrderCreationResult =
+  | (Candidate & { ok: true; transaction: unknown; order: RecordValue; checkout: unknown })
+  | (Candidate & { ok: false; error: string });
+
 function record(value: unknown): RecordValue | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : null;
 }
@@ -78,7 +82,7 @@ async function gatewayTransactions(): Promise<RecordValue[]> {
   return Array.isArray(body.transactions) ? body.transactions.map(record).filter((value): value is RecordValue => value !== null) : [];
 }
 
-async function createOrder(candidate: Candidate, campaignId?: string) {
+async function createOrder(candidate: Candidate, campaignId?: string): Promise<OrderCreationResult> {
   if (!MCP_AGENT_TOKEN) return { ...candidate, ok: false, error: "MCP_AGENT_TOKEN_NOT_CONFIGURED" };
   const args = { authorizationId: candidate.authorizationId, transactionId: candidate.transactionId, ...(campaignId ? { campaignId } : {}) };
   try {
@@ -99,7 +103,9 @@ async function createOrder(candidate: Candidate, campaignId?: string) {
     const result = record(body?.result);
     const structured = record(result?.structuredContent);
     if (!response.ok || result?.isError === true || !structured?.order) return { ...candidate, ok: false, error: "MCP_CREATE_ORDER_FAILED" };
-    return { ...candidate, ok: true, transaction: structured.transaction, order: structured.order, checkout: structured.checkout };
+    const order = record(structured.order);
+    if (!order) return { ...candidate, ok: false, error: "MCP_CREATE_ORDER_INVALID" };
+    return { ...candidate, ok: true, transaction: structured.transaction, order, checkout: structured.checkout };
   } catch (error) {
     return { ...candidate, ok: false, error: error instanceof Error ? error.message : "MCP_UNAVAILABLE" };
   }
@@ -172,7 +178,7 @@ export async function POST(request: Request) {
         const executionFailure: GrowthExperimentExecution = {
           ...executionStart,
           status: "FAILED",
-          lastError: paymentOrder.error ?? "MCP_CREATE_ORDER_FAILED",
+          lastError: paymentOrder.error,
           updatedAt: new Date().toISOString(),
         };
         await createOrUpdateGrowthExperimentExecution(executionFailure);
@@ -180,11 +186,10 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const order = record(paymentOrder.order);
       const executionReady: GrowthExperimentExecution = {
         ...executionStart,
         status: "PAYMENT_PENDING",
-        ...(typeof order?.id === "string" ? { razorpayOrderId: order.id } : {}),
+        razorpayOrderId: paymentOrder.order.id,
         lastError: undefined,
         updatedAt: new Date().toISOString(),
       };
