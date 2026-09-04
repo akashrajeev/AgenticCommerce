@@ -18,6 +18,7 @@ export default function McpLabPage() {
   const [unauthorized, setUnauthorized] = useState<Result>(null);
   const [boundary, setBoundary] = useState<BoundaryResult | null>(null);
   const [guard, setGuard] = useState<Result>(null);
+  const [explanation, setExplanation] = useState<Result>(null);
   const [busy, setBusy] = useState("");
 
   async function run(action: string, setter: (result: Result) => void) {
@@ -63,10 +64,13 @@ export default function McpLabPage() {
                 <strong>3. Discover the current MCP server</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: stateless 2026-07-28 `server/discover` response.</div>
               </button>
               <button disabled={!!busy} onClick={() => void run("tools", setTools)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #ddd", background: "#fafafa", cursor: "pointer" }}>
-                <strong>4. List payment tools</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: five guarded Razorpay operations.</div>
+                <strong>4. List payment tools</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: six guarded Razorpay operations.</div>
               </button>
               <button disabled={!!busy} onClick={() => void run("guard", setGuard)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #ddd", background: "#fafafa", cursor: "pointer" }}>
                 <strong>5. Attempt capture without MANDATE authorization</strong><div style={{ color: "#666", marginTop: 5 }}>Expected: MCP request is accepted, but the payment operation fails closed at the MANDATE boundary.</div>
+              </button>
+              <button disabled={!!busy} onClick={() => void run("explain", setExplanation)} style={{ textAlign: "left", padding: 18, borderRadius: 14, border: "1px solid #c8d8ce", background: "#f5faf6", cursor: "pointer" }}>
+                <strong>6. Explain the latest payment decision</strong><div style={{ color: "#666", marginTop: 5 }}>Read-only: intent, quote, mandate binding, policy checks, Razorpay references and audit timeline. No payment side effect.</div>
               </button>
             </div>
           </div>
@@ -88,6 +92,7 @@ export default function McpLabPage() {
               <div style={{ fontSize: 24, fontWeight: 800, marginTop: 5 }}>{guard?.status === 200 && guardText ? "BLOCKED BEFORE PAYMENT" : "Awaiting test"}</div>
               <div style={{ marginTop: 8, color: "#bbb", lineHeight: 1.45 }}>{guardText ?? "Run the guarded capture test to see the trusted gateway reject an unbound payment operation."}</div>
             </div>
+            <ResultCard title="Read-only payment explanation" result={explanation} accent={explanation?.status === 200 ? "NO PAYMENT SIDE EFFECT" : undefined} pretty={pretty} />
           </div>
         </section>
 
