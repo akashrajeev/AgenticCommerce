@@ -50,11 +50,7 @@ test("persists financial records and webhook idempotency through Prisma", { skip
     state: "policy_authorized",
     intent,
     quote,
-    policy: {
-      decision: "ALLOW",
-      checks: [],
-      evaluatedAt: now,
-    },
+    policy: { decision: "ALLOW", checks: [], evaluatedAt: now },
     createdAt: now,
     updatedAt: now,
   };
@@ -91,7 +87,7 @@ test("persists financial records and webhook idempotency through Prisma", { skip
       verifiedAt: now,
     });
     const evidenceRows = await loadCampaignPaymentEvidence("it-campaign");
-    const persistedEvidence = evidenceRows.find((row) => row.evidenceId === evidenceId);
+    const persistedEvidence = evidenceRows.find((row: (typeof evidenceRows)[number]) => row.evidenceId === evidenceId);
     assert.equal(persistedEvidence?.transactionId, transactionId);
     assert.equal(persistedEvidence?.amountPaise, 399900);
 
