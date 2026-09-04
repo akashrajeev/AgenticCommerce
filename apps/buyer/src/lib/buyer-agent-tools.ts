@@ -129,14 +129,8 @@ function toolParameters(name: BuyerAgentToolName) {
       return { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 } }, required: ["productId"] } as const;
     case "get_quote":
       return {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          lineItems: {
-            type: "array", minItems: 1, maxItems: 10,
-            items: { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 }, quantity: commonQuantity }, required: ["productId", "quantity"] },
-          },
-        },
+        type: "object", additionalProperties: false,
+        properties: { lineItems: { type: "array", minItems: 1, maxItems: 10, items: { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 }, quantity: commonQuantity }, required: ["productId", "quantity"] } } },
         required: ["lineItems"],
       } as const;
     case "compare_products":
@@ -145,14 +139,8 @@ function toolParameters(name: BuyerAgentToolName) {
       return { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 } }, required: ["productId"] } as const;
     case "build_basket":
       return {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          lineItems: {
-            type: "array", minItems: 1, maxItems: 10,
-            items: { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 }, quantity: commonQuantity }, required: ["productId", "quantity"] },
-          },
-        },
+        type: "object", additionalProperties: false,
+        properties: { lineItems: { type: "array", minItems: 1, maxItems: 10, items: { type: "object", additionalProperties: false, properties: { productId: { type: "string", minLength: 1, maxLength: 100 }, quantity: commonQuantity }, required: ["productId", "quantity"] } } },
         required: ["lineItems"],
       } as const;
     case "validate_budget":
@@ -179,9 +167,8 @@ function requireLineItems(value: unknown): BuyerBasketLine[] {
     const item = entry as Record<string, unknown>;
     const productId = requireString(item.productId, "BUYER_AGENT_LINE_ITEMS_INVALID");
     const quantityValue = item.quantity;
-    if (!Number.isSafeInteger(quantityValue) || quantityValue < 1 || quantityValue > 10) throw new Error("BUYER_AGENT_LINE_ITEMS_INVALID");
-    const quantity = quantityValue as number;
-    return { productId, quantity };
+    if (typeof quantityValue !== "number" || !Number.isSafeInteger(quantityValue) || quantityValue < 1 || quantityValue > 10) throw new Error("BUYER_AGENT_LINE_ITEMS_INVALID");
+    return { productId, quantity: quantityValue };
   });
 }
 
@@ -224,8 +211,8 @@ function searchProducts(context: BuyerAgentToolContext, args: Record<string, unk
   const query = typeof args.query === "string" ? args.query.trim() : "";
   const category = typeof args.category === "string" ? args.category.trim().toLowerCase() : "";
   const maxPriceRaw = args.maxPricePaise === undefined ? context.run.constraints.maxSpendPaise : args.maxPricePaise;
-  if (!Number.isSafeInteger(maxPriceRaw) || (maxPriceRaw as number) < 0) throw new Error("BUYER_AGENT_SEARCH_BUDGET_INVALID");
-  const maxPricePaise = maxPriceRaw as number;
+  if (typeof maxPriceRaw !== "number" || !Number.isSafeInteger(maxPriceRaw) || maxPriceRaw < 0) throw new Error("BUYER_AGENT_SEARCH_BUDGET_INVALID");
+  const maxPricePaise = maxPriceRaw;
   const inStockOnly = args.inStockOnly === undefined ? true : args.inStockOnly === true;
   const queryTokens = normalizeText(query);
   const results = catalog.filter((product) => {
@@ -253,7 +240,7 @@ async function checkInventory(context: BuyerAgentToolContext, args: Record<strin
   const productId = requireString(args.productId, "BUYER_AGENT_PRODUCT_ID_REQUIRED");
   const body = await merchantFetch<{ inventory?: number }>(context, `/api/agent/inventory/${encodeURIComponent(productId)}`);
   const inventory = body?.inventory;
-  if (!Number.isSafeInteger(inventory) || inventory < 0) throw new Error("BUYER_AGENT_INVENTORY_INVALID");
+  if (typeof inventory !== "number" || !Number.isSafeInteger(inventory) || inventory < 0) throw new Error("BUYER_AGENT_INVENTORY_INVALID");
   context.workspace.inventory[productId] = inventory;
   return { productId, inventory };
 }
@@ -300,11 +287,10 @@ async function buildBasket(context: BuyerAgentToolContext, args: Record<string, 
 }
 
 function validateBudget(context: BuyerAgentToolContext, args: Record<string, unknown>): { totalPaise: number; maxSpendPaise: number; withinBudget: true } {
-  const totalPaise = args.totalPaise;
-  if (!Number.isSafeInteger(totalPaise) || (totalPaise as number) < 0) throw new Error("BUYER_AGENT_TOTAL_INVALID");
-  const numericTotal = totalPaise as number;
-  assertBuyerBudget(context.run, numericTotal);
-  return { totalPaise: numericTotal, maxSpendPaise: context.run.constraints.maxSpendPaise, withinBudget: true };
+  const raw = args.totalPaise;
+  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 0) throw new Error("BUYER_AGENT_TOTAL_INVALID");
+  assertBuyerBudget(context.run, raw);
+  return { totalPaise: raw, maxSpendPaise: context.run.constraints.maxSpendPaise, withinBudget: true };
 }
 
 function prepareApproval(context: BuyerAgentToolContext): unknown {
