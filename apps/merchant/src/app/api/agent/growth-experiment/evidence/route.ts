@@ -14,6 +14,16 @@ const MCP_INTERNAL_URL = (process.env.MCP_INTERNAL_URL ?? "http://localhost:4100
 const MCP_AGENT_TOKEN = process.env.MCP_AGENT_TOKEN ?? "";
 
 type RecordValue = Record<string, unknown>;
+type SettlementProof = {
+  verified?: boolean;
+  testMode?: boolean;
+  transactionId?: string;
+  orderId?: string;
+  paymentId?: string;
+  amountPaise?: number;
+  order?: { notes?: Record<string, string>; status?: string };
+  payment?: { status?: string; method?: string | null };
+};
 type VerifiedOrder = {
   transactionId: string;
   cohort: "treatment" | "control";
@@ -37,8 +47,8 @@ async function gatewayJson(path: string): Promise<RecordValue> {
   return body;
 }
 
-async function verify(transactionId: string, orderId: string, paymentId: string): Promise<boolean> {
-  if (!MCP_AGENT_TOKEN || !orderId || !paymentId) return false;
+async function verify(transactionId: string, orderId: string, paymentId: string): Promise<SettlementProof | null> {
+  if (!MCP_AGENT_TOKEN || !orderId || !paymentId) return null;
   try {
     const response = await fetch(`${MCP_INTERNAL_URL}/mcp`, {
       method: "POST",
@@ -55,11 +65,16 @@ async function verify(transactionId: string, orderId: string, paymentId: string)
     });
     const body = await response.json().catch(() => null) as RecordValue | null;
     const result = record(body?.result);
-    const proof = record(result?.structuredContent);
-    return response.ok && result?.isError !== true && proof?.verified === true && proof?.testMode === true;
+    const proof = record(result?.structuredContent) as SettlementProof | null;
+    return response.ok && result?.isError !== true && proof?.verified === true && proof?.testMode === true ? proof : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+function campaignBindingMatches(assignment: { cohort: "treatment" | "control" }, proof: SettlementProof, campaignId: string): boolean {
+  const campaign = proof.order?.notes?.growth_campaign_id?.trim() ?? "";
+  return assignment.cohort === "treatment" ? campaign === campaignId : campaign === "";
 }
 
 export async function GET(request: Request) {
@@ -84,13 +99,13 @@ export async function GET(request: Request) {
       const merchantOrder = orderByTransactionId.get(assignment.transactionId);
       const orderId = typeof merchantOrder?.razorpayOrderId === "string" ? merchantOrder.razorpayOrderId : typeof transaction?.razorpayOrderId === "string" ? transaction.razorpayOrderId : "";
       const paymentId = typeof merchantOrder?.razorpayPaymentId === "string" ? merchantOrder.razorpayPaymentId : typeof transaction?.razorpayPaymentId === "string" ? transaction.razorpayPaymentId : "";
-      const verified = await verify(assignment.transactionId, orderId, paymentId);
+      const proof = await verify(assignment.transactionId, orderId, paymentId);
       const existingExecution = await getExecutionSafe(experimentId, assignment.transactionId);
       const now = new Date().toISOString();
-      if (verified) {
-        const amountPaise = typeof merchantOrder?.amountPaise === "number" ? merchantOrder.amountPaise : typeof record(transaction?.quote)?.totalPaise === "number" ? Number(record(transaction?.quote)?.totalPaise) : 0;
-        const baseAmountPaise = typeof merchantOrder?.baseAmountPaise === "number" ? merchantOrder.baseAmountPaise : amountPaise;
-        const incrementalRevenuePaise = typeof merchantOrder?.incrementalRevenuePaise === "number" ? merchantOrder.incrementalRevenuePaise : Math.max(amountPaise - baseAmountPaise, 0);
+      if (proof && campaignBindingMatches(assignment, proof, experiment.campaignId)) {
+        const amountPaise = typeof merchantOrder?.amountPaise === "number" ? merchantOrder.amountPaise : typeof record(transaction?.quote)?.totalPaise === "number" ? Number(record(transaction?.quote)?.totalPaise) : proof.amountPaise ?? 0;
+        const baseAmountPaise = typeof merchantOrder?.baseAmountPaise === "number" ? merchantOrder.baseAmountPaise : assignment.cohort === "treatment" ? amountPaise : amountPaise;
+        const incrementalRevenuePaise = typeof merchantOrder?.incrementalRevenuePaise === "number" ? merchantOrder.incrementalRevenuePaise : assignment.cohort === "treatment" ? Math.max(amountPaise - baseAmountPaise, 0) : 0;
         verifiedOrders.push({ transactionId: assignment.transactionId, cohort: assignment.cohort, sourceProductId: assignment.sourceProductId, ...(assignment.targetProductId ? { targetProductId: assignment.targetProductId } : {}), orderId, paymentId, amountPaise, baseAmountPaise, incrementalRevenuePaise });
         await createOrUpdateGrowthExperimentExecution({
           experimentId,
@@ -103,10 +118,11 @@ export async function GET(request: Request) {
           startedAt: existingExecution?.startedAt ?? now,
           updatedAt: now,
         });
-        return { assignment, verified: true, status: "CONFIRMED" };
+        return { assignment, verified: true, attributionVerified: true, status: "CONFIRMED" };
       }
 
       const transactionState = typeof transaction?.state === "string" ? transaction.state : "";
+      const attributionMismatch = proof !== null;
       if (transactionState === "payment_failed" || transactionState === "cancelled") {
         await createOrUpdateGrowthExperimentExecution({
           experimentId,
@@ -120,10 +136,10 @@ export async function GET(request: Request) {
           startedAt: existingExecution?.startedAt ?? now,
           updatedAt: now,
         });
-        return { assignment, verified: false, status: "RECOVERY_READY" };
+        return { assignment, verified: false, attributionVerified: false, attributionMismatch, status: "RECOVERY_READY" };
       }
 
-      return { assignment, verified: false, status: existingExecution?.status ?? "PAYMENT_PENDING" };
+      return { assignment, verified: false, attributionVerified: false, attributionMismatch, status: existingExecution?.status ?? "PAYMENT_PENDING" };
     }));
 
     const treatment = verifiedOrders.filter((order) => order.cohort === "treatment");
@@ -157,7 +173,7 @@ export async function GET(request: Request) {
         treatmentVerificationRate: assignments.filter((item) => item.cohort === "treatment").length > 0 ? treatment.length / assignments.filter((item) => item.cohort === "treatment").length * 100 : 0,
         controlVerificationRate: assignments.filter((item) => item.cohort === "control").length > 0 ? control.length / assignments.filter((item) => item.cohort === "control").length * 100 : 0,
       },
-      interpretation: "Observed Test Mode AOV difference only. This is not a causal marketing claim; it becomes evidence-backed only for independently verified Razorpay Test Mode payments linked to the persisted experiment assignments.",
+      interpretation: "Observed Test Mode AOV difference only. Treatment evidence additionally requires Razorpay Test Mode order notes to contain the experiment campaign ID; control evidence requires that growth campaign tag to be absent. This is not a causal marketing claim.",
     }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "GROWTH_EXPERIMENT_EVIDENCE_FAILED";
