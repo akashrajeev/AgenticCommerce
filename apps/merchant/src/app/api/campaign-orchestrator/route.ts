@@ -63,7 +63,7 @@ function transactionPayload(transaction: Transaction, allowedProductIds: Set<str
   };
 }
 
-async function createTestOrder(authorizationId: string, transactionId: string) {
+async function createTestOrder(authorizationId: string, transactionId: string, campaignId: string) {
   if (!MCP_AGENT_TOKEN) return { ok: false, error: "MCP_AGENT_TOKEN_NOT_CONFIGURED" } as const;
   try {
     const response = await fetch(`${MCP_INTERNAL_URL}/mcp`, {
@@ -79,7 +79,7 @@ async function createTestOrder(authorizationId: string, transactionId: string) {
         jsonrpc: "2.0",
         id: `campaign-${transactionId}`,
         method: "tools/call",
-        params: { name: "mandate_razorpay_create_order", arguments: { authorizationId, transactionId } },
+        params: { name: "mandate_razorpay_create_order", arguments: { authorizationId, transactionId, campaignId } },
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(12000),
@@ -134,7 +134,7 @@ export async function POST(request: Request) {
 
   const results = [] as Array<Record<string, unknown>>;
   for (const candidate of candidates) {
-    const result = await createTestOrder(candidate.authorizationId, candidate.transactionId);
+    const result = await createTestOrder(candidate.authorizationId, candidate.transactionId, campaign.id);
     results.push({ ...candidate, ...result });
   }
   return NextResponse.json({ testModeOnly: true, campaignId, requested: transactionIds.length, results, next: "Complete the Razorpay Test Mode Checkout for each created order, then open /growth for independently verified uplift." });

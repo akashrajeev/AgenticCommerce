@@ -22,7 +22,7 @@ type Order = {
   createdAt: string;
 };
 
-type Proof = { verified?: boolean; testMode?: boolean; amountPaise?: number; orderId?: string; paymentId?: string };
+type Proof = { verified?: boolean; testMode?: boolean; amountPaise?: number; orderId?: string; paymentId?: string; order?: { notes?: Record<string, string> } };
 
 type McpBody = { result?: { isError?: boolean; structuredContent?: Proof } };
 
@@ -65,8 +65,8 @@ export default async function GrowthAttributionPage() {
 
   const campaignRows = growthCampaigns.map((campaign) => {
     const opportunities = getCampaignOpportunities(campaign);
-    const recommendedIds = new Set(opportunities.map((item) => item.productId));
-    const matched = verified.filter(({ order }) => order.productId ? recommendedIds.has(order.productId) : false);
+    const campaignId = campaign.id;
+    const matched = verified.filter(({ proof }) => proof?.order?.notes?.growth_campaign_id === campaignId);
     const incremental = matched.reduce((sum, item) => sum + item.order.incrementalRevenuePaise, 0);
     const baseline = matched.reduce((sum, item) => sum + item.order.baseAmountPaise, 0);
     return { campaign, matched, incremental, baseline, uplift: baseline > 0 ? incremental / baseline * 100 : 0 };
