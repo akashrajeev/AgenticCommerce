@@ -48,8 +48,8 @@ async function ensureSchema(): Promise<void> {
   const sql = getClient();
   if (!sql) return;
   if (!schemaReady) {
-    schemaReady = sql`
-      CREATE TABLE IF NOT EXISTS buyer_agent_runs (
+    schemaReady = (async () => {
+      await sql`CREATE TABLE IF NOT EXISTS buyer_agent_runs (
         id TEXT PRIMARY KEY,
         objective TEXT NOT NULL,
         max_spend_paise BIGINT NOT NULL,
@@ -64,9 +64,9 @@ async function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL,
         completed_at TIMESTAMPTZ
-      );
-      ALTER TABLE buyer_agent_runs ADD COLUMN IF NOT EXISTS workspace JSONB;
-      CREATE TABLE IF NOT EXISTS buyer_agent_steps (
+      )`;
+      await sql`ALTER TABLE buyer_agent_runs ADD COLUMN IF NOT EXISTS workspace JSONB`;
+      await sql`CREATE TABLE IF NOT EXISTS buyer_agent_steps (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES buyer_agent_runs(id) ON DELETE CASCADE,
         step INTEGER NOT NULL,
@@ -83,10 +83,10 @@ async function ensureSchema(): Promise<void> {
         completed_at TIMESTAMPTZ,
         duration_ms INTEGER,
         CONSTRAINT buyer_agent_steps_run_step_key UNIQUE (run_id, step)
-      );
-      CREATE INDEX IF NOT EXISTS buyer_agent_steps_run_started_idx ON buyer_agent_steps(run_id, started_at);
-      CREATE INDEX IF NOT EXISTS buyer_agent_runs_updated_idx ON buyer_agent_runs(updated_at DESC);
-    `.then(() => undefined).catch((error) => {
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS buyer_agent_steps_run_started_idx ON buyer_agent_steps(run_id, started_at)`;
+      await sql`CREATE INDEX IF NOT EXISTS buyer_agent_runs_updated_idx ON buyer_agent_runs(updated_at DESC)`;
+    })().catch((error) => {
       schemaReady = undefined;
       throw error;
     });
@@ -122,17 +122,8 @@ export async function persistBuyerAgentCheckpoint(run: BuyerAgentRunSnapshot, st
       )
       ON CONFLICT (id) DO UPDATE SET
         objective = EXCLUDED.objective,
-        max_spend_paise = EXCLUDED.max_spend_paise,
-        currency = EXCLUDED.currency,
-        max_steps = EXCLUDED.max_steps,
-        state = EXCLUDED.state,
-        step_count = EXCLUDED.step_count,
-        planner_calls = EXCLUDED.planner_calls,
-        planner_model = EXCLUDED.planner_model,
-        last_error = EXCLUDED.last_error,
-        workspace = EXCLUDED.workspace,
-        updated_at = EXCLUDED.updated_at,
-        completed_at = EXCLUDED.completed_at
+        campaign_id = EXCLUDED.campaign_id,
+        max_spend_paise = EXCLUDED.max_spend_paise
     `;
     if (step) {
       await tx`
