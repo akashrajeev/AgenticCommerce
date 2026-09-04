@@ -31,12 +31,14 @@ async function mcpCall(name: string, args: Record<string, unknown>) {
   });
 }
 
-function isVerifiedSettlement(body: unknown): boolean {
-  if (!body || typeof body !== "object") return false;
+function verifiedSettlement(body: unknown): Record<string, unknown> | null {
+  if (!body || typeof body !== "object") return null;
   const result = (body as Record<string, unknown>).result;
-  if (!result || typeof result !== "object") return false;
+  if (!result || typeof result !== "object") return null;
   const structured = (result as Record<string, unknown>).structuredContent;
-  return Boolean(structured && typeof structured === "object" && (structured as Record<string, unknown>).verified === true && (structured as Record<string, unknown>).testMode === true);
+  if (!structured || typeof structured !== "object") return null;
+  const proof = structured as Record<string, unknown>;
+  return proof.verified === true && proof.testMode === true ? proof : null;
 }
 
 export async function GET() {
@@ -66,11 +68,17 @@ export async function GET() {
     const proof = transactionId && orderId && paymentId ? await mcpCall("mandate_razorpay_verify_settlement", { transactionId, orderId, paymentId }) : { ok: false, status: 0, body: null };
     return { order, proof };
   }));
-  const verifiedPayments = proofs.filter((entry) => entry.proof.ok && isVerifiedSettlement(entry.proof.body)).length;
-  const growthUpliftPaise = proofs.reduce((total, entry) => {
-    if (!entry.proof.ok || !isVerifiedSettlement(entry.proof.body)) return total;
-    return total + (typeof entry.order.incrementalRevenuePaise === "number" ? entry.order.incrementalRevenuePaise : 0);
-  }, 0);
+  const verified = proofs.map((entry) => ({ ...entry, evidence: entry.proof.ok ? verifiedSettlement(entry.proof.body) : null })).filter((entry) => entry.evidence !== null);
+  const verifiedPayments = verified.length;
+  const growthUpliftPaise = verified.reduce((total, entry) => total + (typeof entry.order.incrementalRevenuePaise === "number" ? entry.order.incrementalRevenuePaise : 0), 0);
+  const campaignVerified = verified.filter((entry) => {
+    const notes = entry.evidence?.order;
+    if (!notes || typeof notes !== "object") return false;
+    const orderEvidence = notes as Record<string, unknown>;
+    const razorpayOrderNotes = orderEvidence.notes;
+    return Boolean(razorpayOrderNotes && typeof razorpayOrderNotes === "object" && typeof (razorpayOrderNotes as Record<string, unknown>).growth_campaign_id === "string" && (razorpayOrderNotes as Record<string, unknown>).growth_campaign_id);
+  });
+  const campaignVerifiedUpliftPaise = campaignVerified.reduce((total, entry) => total + (typeof entry.order.incrementalRevenuePaise === "number" ? entry.order.incrementalRevenuePaise : 0), 0);
 
   const gatewayBody = gatewayHealth.body && typeof gatewayHealth.body === "object" ? gatewayHealth.body as Record<string, unknown> : {};
   const mcpBody = mcpHealth.body && typeof mcpHealth.body === "object" ? mcpHealth.body as Record<string, unknown> : {};
@@ -95,6 +103,8 @@ export async function GET() {
       razorpayVerifiedPayments: verifiedPayments,
       protocolCount: protocolMatrix.ok && protocolMatrix.body && typeof protocolMatrix.body === "object" ? ((protocolMatrix.body as Record<string, unknown>).summary as Record<string, unknown> | undefined)?.total ?? 0 : 0,
       growthUpliftPaise,
+      campaignVerifiedPayments: campaignVerified.length,
+      campaignVerifiedUpliftPaise,
     },
     links: { negotiation: "/negotiation", growth: "/growth", growthBatch: "/growth-batch", campaigns: `${merchant}/campaign-orchestrator`, campaignAttribution: `${merchant}/campaigns/attribution`, mcp: "/mcp/authorized", x402: "/x402", protocols: "/protocols", proof: "/proof" },
   });
