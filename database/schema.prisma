@@ -102,3 +102,48 @@ model CampaignPaymentEvidence {
   @@index([campaignId, verifiedAt])
   @@map("campaign_payment_evidence")
 }
+
+model GrowthAgentRun {
+  id                  String            @id
+  objective           String
+  campaignId          String            @map("campaign_id")
+  maxSpendPaise       BigInt?           @map("max_spend_paise")
+  maxSteps            Int               @map("max_steps")
+  state               String
+  stepCount           Int               @map("step_count")
+  plannerCalls        Int               @map("planner_calls")
+  plannerModel        String?           @map("planner_model")
+  lastPlannerError    String?           @map("last_planner_error")
+  selectedOpportunity Json?             @map("selected_opportunity")
+  preparedOffer       Json?             @map("prepared_offer")
+  createdAt           DateTime          @map("created_at")
+  updatedAt           DateTime          @map("updated_at")
+  completedAt         DateTime?         @map("completed_at")
+  steps               GrowthAgentStep[]
+
+  @@index([campaignId, createdAt])
+  @@map("growth_agent_runs")
+}
+
+model GrowthAgentStep {
+  id           String         @id
+  runId        String         @map("run_id")
+  step         Int
+  state        String
+  tool         String
+  reason       String
+  status       String
+  input        Json
+  output       Json?
+  error        String?
+  callId       String?        @map("call_id")
+  plannerModel String?        @map("planner_model")
+  startedAt    DateTime       @map("started_at")
+  completedAt  DateTime?      @map("completed_at")
+  durationMs   Int?           @map("duration_ms")
+  run          GrowthAgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, step])
+  @@index([runId, startedAt])
+  @@map("growth_agent_steps")
+}
