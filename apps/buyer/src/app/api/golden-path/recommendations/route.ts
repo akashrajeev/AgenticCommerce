@@ -8,18 +8,26 @@ function normalizeRecommendations(body: unknown) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const record = body as Record<string, unknown>;
   if (!Array.isArray(record.recommendations)) return body;
+
+  const recommendations = record.recommendations
+    .filter((item): item is Recommendation => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    .map((recommendation) => ({
+      ...recommendation,
+      quantity: Number.isSafeInteger(recommendation.quantity) && Number(recommendation.quantity) > 0
+        ? Number(recommendation.quantity)
+        : 1,
+    }));
+
+  // The canonical growth demo needs a complementary product so an approved
+  // add-on matches the merchant's CROSS_SELL campaign and creates attributable
+  // incremental revenue. Keep upsells available as fallback, but prefer a
+  // campaign-eligible cross-sell first.
+  const crossSell = recommendations.filter((item) => item.type === "CROSS_SELL");
+  const fallback = recommendations.filter((item) => item.type !== "CROSS_SELL");
+
   return {
     ...record,
-    recommendations: record.recommendations.map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
-      const recommendation = item as Recommendation;
-      return {
-        ...recommendation,
-        quantity: Number.isSafeInteger(recommendation.quantity) && Number(recommendation.quantity) > 0
-          ? Number(recommendation.quantity)
-          : 1,
-      };
-    }),
+    recommendations: [...crossSell, ...fallback].slice(0, 2),
   };
 }
 
