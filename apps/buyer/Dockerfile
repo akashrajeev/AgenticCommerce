@@ -7,7 +7,7 @@ COPY apps/gateway/package.json apps/gateway/package.json
 COPY packages/types/package.json packages/types/package.json
 COPY packages/shared/package.json packages/shared/package.json
 COPY packages/schemas/package.json packages/schemas/package.json
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 FROM node:22-alpine AS builder
 WORKDIR /app
