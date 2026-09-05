@@ -161,7 +161,8 @@ export async function requestGrowthAiPlan(objective: string, context: GrowthAiCo
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("AI_GROWTH_NOT_CONFIGURED");
   const model = (process.env.OPENAI_MODEL ?? "gpt-5.6").trim();
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const baseUrl = (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/responses`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
