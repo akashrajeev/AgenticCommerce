@@ -3,15 +3,16 @@ import { NextResponse } from "next/server";
 const MERCHANT_INTERNAL_URL = process.env.MERCHANT_INTERNAL_URL ?? "http://localhost:3000";
 
 type Recommendation = Record<string, unknown>;
+type NormalizedRecommendation = Recommendation & { quantity: number };
 
 function normalizeRecommendations(body: unknown) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const record = body as Record<string, unknown>;
   if (!Array.isArray(record.recommendations)) return body;
 
-  const recommendations = record.recommendations
+  const recommendations: NormalizedRecommendation[] = record.recommendations
     .filter((item): item is Recommendation => Boolean(item && typeof item === "object" && !Array.isArray(item)))
-    .map((recommendation) => ({
+    .map((recommendation): NormalizedRecommendation => ({
       ...recommendation,
       quantity: Number.isSafeInteger(recommendation.quantity) && Number(recommendation.quantity) > 0
         ? Number(recommendation.quantity)
