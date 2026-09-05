@@ -16,7 +16,7 @@ export async function GET() {
     const [gatewayHealth, gatewayRoot, merchantHealth, manifest, transactions, orders, mcpHealth] = await Promise.all([
       request(`${GATEWAY_INTERNAL_URL}/health`),
       request(`${GATEWAY_INTERNAL_URL}/`),
-      request(`${MERCHANT_INTERNAL_URL}/health`),
+      request(`${MERCHANT_INTERNAL_URL}/api/health`),
       request(`${MERCHANT_INTERNAL_URL}/.well-known/agent-commerce`),
       request(`${GATEWAY_INTERNAL_URL}/v1/transactions`),
       request(`${GATEWAY_INTERNAL_URL}/v1/merchant/orders`),
