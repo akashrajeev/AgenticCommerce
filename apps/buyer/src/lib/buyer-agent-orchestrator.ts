@@ -309,7 +309,8 @@ async function defaultBuyerAgentPlanner(input: Parameters<BuyerAgentPlanner>[0])
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("BUYER_AGENT_AI_NOT_CONFIGURED");
   const observation = buildBuyerAgentObservation(input.run, input.workspace);
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const baseUrl = (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/responses`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
